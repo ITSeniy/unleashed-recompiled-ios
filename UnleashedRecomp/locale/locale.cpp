@@ -856,6 +856,258 @@ std::unordered_map<std::string_view, std::unordered_map<ELanguage, std::string>>
             { ELanguage::Spanish,  "Cambiar" },
             { ELanguage::Italian,  "Cambia" }
         }
+    },
+    {
+        "IOSLauncher_Play",
+        {
+            { ELanguage::English, "Play" }
+        }
+    },
+    {
+        "IOSLauncher_InstallGame",
+        {
+            { ELanguage::English, "Install game" }
+        }
+    },
+    {
+        "IOSLauncher_InstallDLC",
+        {
+            { ELanguage::English, "Install DLC" }
+        }
+    },
+    {
+        "IOSLauncher_Files",
+        {
+            { ELanguage::English, "Files" }
+        }
+    },
+    {
+        "IOSLauncher_ShareLog",
+        {
+            { ELanguage::English, "Share log" }
+        }
+    },
+    {
+        "IOSLauncher_Version",
+        {
+            { ELanguage::English, "Version" }
+        }
+    },
+    {
+        "IOSLauncher_Section_Game",
+        {
+            { ELanguage::English, "Game" }
+        }
+    },
+    {
+        "IOSLauncher_Section_Graphics",
+        {
+            { ELanguage::English, "Graphics" }
+        }
+    },
+    {
+        "IOSLauncher_Section_Advanced",
+        {
+            { ELanguage::English, "Advanced" }
+        }
+    },
+    {
+        "IOSLauncher_Status_Ready",
+        {
+            { ELanguage::English, "Game ready" }
+        }
+    },
+    {
+        "IOSLauncher_Status_Missing",
+        {
+            { ELanguage::English, "Game not installed" }
+        }
+    },
+    {
+        "IOSLauncher_Group_Installation",
+        {
+            { ELanguage::English, "Installation" }
+        }
+    },
+    {
+        "IOSLauncher_Group_DLC",
+        {
+            { ELanguage::English, "Downloadable content" }
+        }
+    },
+    {
+        "IOSLauncher_Game_Base",
+        {
+            { ELanguage::English, "Game" }
+        }
+    },
+    {
+        "IOSLauncher_Game_Update",
+        {
+            { ELanguage::English, "Title update" }
+        }
+    },
+    {
+        "IOSLauncher_Game_Folder",
+        {
+            { ELanguage::English, "Folder" }
+        }
+    },
+    {
+        "IOSLauncher_OnMyiPhone",
+        {
+            { ELanguage::English, "On My iPhone" }
+        }
+    },
+    {
+        "IOSLauncher_OnMyiPad",
+        {
+            { ELanguage::English, "On My iPad" }
+        }
+    },
+    {
+        "IOSLauncher_Installed",
+        {
+            { ELanguage::English, "Installed" }
+        }
+    },
+    {
+        "IOSLauncher_NotInstalled",
+        {
+            { ELanguage::English, "Not installed" }
+        }
+    },
+    {
+        "IOSLauncher_Game_Footer",
+        {
+            { ELanguage::English, "Copy the game, update and dlc folders from an installed PC or Android copy into this folder, or install from your own disc image and packages." }
+        }
+    },
+    {
+        "IOSLauncher_Install_Footer",
+        {
+            { ELanguage::English, "The installer reads your Xbox 360 disc image, title update and DLC packages and asks where to find them." }
+        }
+    },
+    {
+        "IOSLauncher_Recheck",
+        {
+            { ELanguage::English, "Check again" }
+        }
+    },
+    {
+        "IOSLauncher_Group_Resolution",
+        {
+            { ELanguage::English, "Resolution" }
+        }
+    },
+    {
+        "IOSLauncher_Resolution_Footer",
+        {
+            { ELanguage::English, "Lower resolution is faster. MetalFX upscales the picture back to the screen's resolution and keeps it sharp." }
+        }
+    },
+    {
+        "IOSLauncher_Group_FrameRate",
+        {
+            { ELanguage::English, "Frame rate" }
+        }
+    },
+    {
+        "IOSLauncher_Unlimited",
+        {
+            { ELanguage::English, "Unlimited" }
+        }
+    },
+    {
+        "IOSLauncher_Group_Quality",
+        {
+            { ELanguage::English, "Quality" }
+        }
+    },
+    {
+        "IOSLauncher_Group_Optimizations",
+        {
+            { ELanguage::English, "Optimizations" }
+        }
+    },
+    {
+        "IOSLauncher_Group_Overlays",
+        {
+            { ELanguage::English, "Overlays" }
+        }
+    },
+    {
+        "IOSLauncher_Overlays_Footer",
+        {
+            { ELanguage::English, "Metal HUD shows Apple's frame time graph." }
+        }
+    },
+    {
+        "IOSLauncher_Group_Startup",
+        {
+            { ELanguage::English, "Startup" }
+        }
+    },
+    {
+        "IOSLauncher_SkipIntro",
+        {
+            { ELanguage::English, "Skip intro logos" }
+        }
+    },
+    {
+        "IOSLauncher_Group_Testing",
+        {
+            { ELanguage::English, "Testing" }
+        }
+    },
+    {
+        "IOSLauncher_ForceETC2",
+        {
+            { ELanguage::English, "Force ETC2 textures" }
+        }
+    },
+    {
+        "IOSLauncher_Testing_Footer",
+        {
+            { ELanguage::English, "Converts textures to ETC2 as on GPUs without BC support. Loading is slower; use it to test that path." }
+        }
+    },
+    {
+        "IOSLauncher_Group_Diagnostics",
+        {
+            { ELanguage::English, "Diagnostics" }
+        }
+    },
+    {
+        "IOSLauncher_FrameLog",
+        {
+            { ELanguage::English, "Frame timing log" }
+        }
+    },
+    {
+        "IOSLauncher_PassLog",
+        {
+            { ELanguage::English, "GPU pass timings" }
+        }
+    },
+    {
+        "IOSLauncher_ResolveLog",
+        {
+            { ELanguage::English, "Render target copy log" }
+        }
+    },
+    {
+        "IOSLauncher_Diagnostics_Footer",
+        {
+            { ELanguage::English, "Written to unleashedrecomp.log. Diagnostics add overhead, so turn them off for normal play." }
+        }
+    },
+    {
+        "IOSLauncher_OK",
+        {
+            { ELanguage::English, "OK" }
+        }
     }
 };
 

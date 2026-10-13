@@ -2344,6 +2344,15 @@ bool Video::CreateHostDevice(const char *sdlVideoDriver, bool graphicsApiRetry)
             LOG_WARNING("force_bc.txt present: forcing native BC textures and disabling ETC2 transcode. Textures will corrupt if this GPU lacks BC support.");
         }
     }
+#elif defined(UNLEASHED_RECOMP_IOS)
+    // Testing hook (the launcher's Force ETC2 textures switch): exercise the ETC2/EAC
+    // transcode on Apple GPUs that support BC.
+    if (const char* value = std::getenv("UNLEASHED_IOS_FORCE_NO_BC"); value != nullptr && value[0] == '1' &&
+        g_capabilities.textureCompressionBC && g_capabilities.textureCompressionETC2)
+    {
+        g_capabilities.textureCompressionBC = false;
+        LOG_WARNING("UNLEASHED_IOS_FORCE_NO_BC=1: BC texture support disabled to test the ETC2 transcode.");
+    }
 #endif
 
     if (!g_capabilities.textureCompressionBC)

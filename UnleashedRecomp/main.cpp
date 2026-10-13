@@ -39,6 +39,7 @@
 
 #if defined(UNLEASHED_RECOMP_IOS)
 #include <ui/ios_event_loop.h>
+#include <ui/ios_launcher.h>
 #endif
 
 #ifdef _WIN32
@@ -358,6 +359,24 @@ int main(int argc, char *argv[])
     os::logger::LogRuntimeDiagnostics("host startup begin");
     HostStartup();
     os::logger::LogRuntimeDiagnostics("host startup complete");
+
+#if defined(UNLEASHED_RECOMP_IOS)
+    // A pending installer action from the previous session skips the launcher.
+    if (!forceInstaller && !forceDLCInstaller)
+    {
+        switch (RunIOSLauncher())
+        {
+        case IOSLauncherAction::Install:
+            forceInstaller = true;
+            break;
+        case IOSLauncherAction::InstallDLC:
+            forceDLCInstaller = true;
+            break;
+        case IOSLauncherAction::Play:
+            break;
+        }
+    }
+#endif
 
     const std::filesystem::path gameRoot = GetGamePath();
     const std::filesystem::path patchedExecutablePath = gameRoot / "patched" / "default.xex";
