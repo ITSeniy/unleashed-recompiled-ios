@@ -72,6 +72,41 @@ static NSString* OneLine(const std::string& text)
     return [NS(text) stringByReplacingOccurrencesOfString:@"\n" withString:@" "];
 }
 
+// The port's releases are tagged ios-vX.Y.Z on the fork.
+static NSString* const ReleasesAPI = @"https://api.github.com/repos/ITSeniy/unleashed-recompiled-ios/releases/latest";
+static NSString* const ReleasesPage = @"https://github.com/ITSeniy/unleashed-recompiled-ios/releases";
+static constexpr NSTimeInterval UpdateCheckInterval = 6 * 60 * 60;
+
+static NSString* BundleVersion()
+{
+    return [NSBundle.mainBundle objectForInfoDictionaryKey:@"CFBundleShortVersionString"] ?: @"0";
+}
+
+static NSArray<NSNumber*>* VersionParts(NSString* version)
+{
+    const NSRange digit = [version rangeOfCharacterFromSet:NSCharacterSet.decimalDigitCharacterSet];
+    if (digit.location == NSNotFound)
+        return @[];
+    NSMutableArray<NSNumber*>* parts = [NSMutableArray array];
+    for (NSString* part in [[version substringFromIndex:digit.location] componentsSeparatedByString:@"."])
+        [parts addObject:@(part.integerValue)];
+    return parts;
+}
+
+static bool IsNewerVersion(NSString* candidate, NSString* current)
+{
+    NSArray<NSNumber*>* a = VersionParts(candidate);
+    NSArray<NSNumber*>* b = VersionParts(current);
+    for (NSUInteger i = 0; i < std::max(a.count, b.count); i++)
+    {
+        const NSInteger x = i < a.count ? a[i].integerValue : 0;
+        const NSInteger y = i < b.count ? b[i].integerValue : 0;
+        if (x != y)
+            return x > y;
+    }
+    return false;
+}
+
 typedef NS_ENUM(NSInteger, LauncherRowKind)
 {
     LauncherRowInfo,
@@ -218,6 +253,8 @@ static InstallStatus InspectInstallation()
     InstallStatus _status;
     std::vector<IOSMod> _mods;
     BOOL _reordering;
+    BOOL _checkingUpdates;
+    NSString* _updateError;
     NSInteger _section;
     NSArray<NSString*>* _sectionTitles;
     NSArray<NSString*>* _sectionSymbols;
@@ -250,8 +287,8 @@ static InstallStatus InspectInstallation()
     [super viewDidLoad];
     self.view.backgroundColor = UIColor.systemGroupedBackgroundColor;
     _sectionTitles = @[ L("IOSLauncher_Section_Game"), L("IOSLauncher_Section_Graphics"), L("IOSLauncher_Section_Controls"),
-        L("IOSLauncher_Section_Mods"), L("IOSLauncher_Section_Advanced") ];
-    _sectionSymbols = @[ @"gamecontroller", @"display", @"hand.tap", @"puzzlepiece.extension", @"wrench.and.screwdriver" ];
+        L("IOSLauncher_Section_Mods"), L("IOSLauncher_Section_Updates"), L("IOSLauncher_Section_Advanced") ];
+    _sectionSymbols = @[ @"gamecontroller", @"display", @"hand.tap", @"puzzlepiece.extension", @"arrow.down.circle", @"wrench.and.screwdriver" ];
     _section = [NSUserDefaults.standardUserDefaults integerForKey:@"launcher.section"];
     if (_section < 0 || _section >= (NSInteger)_sectionTitles.count)
         _section = 0;
@@ -299,6 +336,10 @@ static InstallStatus InspectInstallation()
     [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(refresh)
         name:UIApplicationDidBecomeActiveNotification object:nil];
     [self refresh];
+
+    const NSTimeInterval lastCheck = [NSUserDefaults.standardUserDefaults doubleForKey:@"launcher.update.checked"];
+    if (NSDate.date.timeIntervalSince1970 - lastCheck > UpdateCheckInterval)
+        [self checkForUpdates];
 }
 
 - (UIView*)divider
@@ -438,6 +479,11 @@ static InstallStatus InspectInstallation()
     [self selectSection:3];
 }
 
+- (void)showUpdates
+{
+    [self selectSection:4];
+}
+
 - (void)selectSectionButton:(UIButton*)sender
 {
     [self selectSection:sender.tag];
@@ -498,6 +544,13 @@ static InstallStatus InspectInstallation()
         NSString* dlc = [NSString stringWithFormat:@"DLC %d/%d", _status.dlcCount, int(DLC::Count)];
         [_chips addArrangedSubview:[self chip:dlc color:UIColor.systemBlueColor]];
     }
+    if ([self isUpdateAvailable])
+    {
+        UIButton* update = [self chip:L("IOSLauncher_Chip_Update") color:UIColor.systemOrangeColor];
+        update.userInteractionEnabled = YES;
+        [update addTarget:self action:@selector(showUpdates) forControlEvents:UIControlEventPrimaryActionTriggered];
+        [_chips addArrangedSubview:update];
+    }
     const auto activeMods = std::count_if(_mods.begin(), _mods.end(), [](const IOSMod& mod) { return mod.enabled; });
     if (activeMods > 0)
     {
@@ -538,7 +591,8 @@ static InstallStatus InspectInstallation()
     case 1: _groups = [self graphicsGroups]; break;
     case 2: _groups = [self controlsGroups]; break;
     case 3: _groups = [self modsGroups]; break;
-    case 4: _groups = [self advancedGroups]; break;
+    case 4: _groups = [self updatesGroups]; break;
+    case 5: _groups = [self advancedGroups]; break;
     default: _groups = [self gameGroups]; break;
     }
     [self updateRail];
@@ -853,6 +907,126 @@ static InstallStatus InspectInstallation()
             }];
         });
     });
+}
+
+- (NSString*)latestVersion
+{
+    return [NSUserDefaults.standardUserDefaults stringForKey:@"launcher.update.tag"];
+}
+
+- (BOOL)isUpdateAvailable
+{
+    NSString* latest = [self latestVersion];
+    return latest != nil && IsNewerVersion(latest, BundleVersion());
+}
+
+- (void)checkForUpdates
+{
+    if (_checkingUpdates)
+        return;
+    _checkingUpdates = YES;
+    _updateError = nil;
+    if (_section == 4)
+        [self rebuildGroups];
+
+    NSMutableURLRequest* request = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:ReleasesAPI]];
+    [request setValue:@"application/vnd.github+json" forHTTPHeaderField:@"Accept"];
+    request.timeoutInterval = 15;
+    __weak LauncherViewController* weakSelf = self;
+    [[NSURLSession.sharedSession dataTaskWithRequest:request completionHandler:^(NSData* data, NSURLResponse* response, NSError* error)
+    {
+        const NSInteger status = [response isKindOfClass:NSHTTPURLResponse.class] ? ((NSHTTPURLResponse*)response).statusCode : 0;
+        dispatch_async(dispatch_get_main_queue(), ^{ [weakSelf finishUpdateCheck:data status:status error:error]; });
+    }] resume];
+}
+
+- (void)finishUpdateCheck:(NSData*)data status:(NSInteger)status error:(NSError*)error
+{
+    _checkingUpdates = NO;
+    NSUserDefaults* defaults = NSUserDefaults.standardUserDefaults;
+    NSDictionary* release = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
+    if (error != nil)
+    {
+        _updateError = error.localizedDescription;
+    }
+    else if (status == 404)
+    {
+        // No release has been published yet.
+        for (NSString* key in @[ @"launcher.update.tag", @"launcher.update.url", @"launcher.update.notes" ])
+            [defaults removeObjectForKey:key];
+        [defaults setDouble:NSDate.date.timeIntervalSince1970 forKey:@"launcher.update.checked"];
+    }
+    else if (status == 200 && [release isKindOfClass:NSDictionary.class] && [release[@"tag_name"] isKindOfClass:NSString.class])
+    {
+        [defaults setObject:release[@"tag_name"] forKey:@"launcher.update.tag"];
+        if ([release[@"html_url"] isKindOfClass:NSString.class])
+            [defaults setObject:release[@"html_url"] forKey:@"launcher.update.url"];
+        if ([release[@"body"] isKindOfClass:NSString.class])
+            [defaults setObject:release[@"body"] forKey:@"launcher.update.notes"];
+        else
+            [defaults removeObjectForKey:@"launcher.update.notes"];
+        [defaults setDouble:NSDate.date.timeIntervalSince1970 forKey:@"launcher.update.checked"];
+    }
+    else
+    {
+        _updateError = [NSString stringWithFormat:@"HTTP %ld", (long)status];
+    }
+    LOGFN("Update check finished: status {}, latest {}.", (long)status, std::string(([self latestVersion] ?: @"none").UTF8String));
+    [self updateHome];
+    if (_section == 4)
+        [self rebuildGroups];
+}
+
+- (NSArray<LauncherGroup*>*)updatesGroups
+{
+    __weak LauncherViewController* weakSelf = self;
+    NSUserDefaults* defaults = NSUserDefaults.standardUserDefaults;
+    NSString* latest = [self latestVersion];
+    const NSTimeInterval checked = [defaults doubleForKey:@"launcher.update.checked"];
+
+    NSString* footer;
+    if (_checkingUpdates)
+        footer = L("IOSLauncher_Update_Checking");
+    else if (_updateError != nil)
+        footer = [L("IOSLauncher_Update_Failed") stringByReplacingOccurrencesOfString:@"{}" withString:_updateError];
+    else if ([self isUpdateAvailable])
+        footer = L("IOSLauncher_Update_Available");
+    else if (checked > 0)
+        footer = latest ? L("IOSLauncher_Update_Current") : L("IOSLauncher_Update_NoReleases");
+    else
+        footer = nil;
+
+    LauncherGroup* version = [LauncherGroup groupWithHeader:L("IOSLauncher_Group_Version") footer:footer];
+    [version.rows addObject:[self infoRow:L("IOSLauncher_Update_Installed") value:BundleVersion() symbol:@"iphone" color:UIColor.systemBlueColor]];
+    NSString* latestText = latest ? [latest stringByReplacingOccurrencesOfString:@"ios-v" withString:@""] : @"—";
+    [version.rows addObject:[self infoRow:L("IOSLauncher_Update_Latest") value:latestText symbol:@"shippingbox"
+        color:[self isUpdateAvailable] ? UIColor.systemOrangeColor : UIColor.systemBlueColor]];
+    NSString* checkedText = L("IOSLauncher_Update_Never");
+    if (checked > 0)
+    {
+        NSRelativeDateTimeFormatter* formatter = [NSRelativeDateTimeFormatter new];
+        checkedText = [formatter localizedStringForDate:[NSDate dateWithTimeIntervalSince1970:checked] relativeToDate:NSDate.date];
+    }
+    [version.rows addObject:[self infoRow:L("IOSLauncher_Update_LastChecked") value:checkedText symbol:@"clock" color:UIColor.systemBlueColor]];
+
+    LauncherGroup* actions = [LauncherGroup groupWithHeader:nil footer:L("IOSLauncher_Update_Footer")];
+    [actions.rows addObject:[self actionRow:_checkingUpdates ? L("IOSLauncher_Update_Checking") : L("IOSLauncher_Update_Check")
+        symbol:@"arrow.clockwise" action:^(UIView*) { [weakSelf checkForUpdates]; }]];
+    NSString* page = [defaults stringForKey:@"launcher.update.url"] ?: ReleasesPage;
+    [actions.rows addObject:[self actionRow:L("IOSLauncher_Update_OpenPage") symbol:@"safari" action:^(UIView*)
+    {
+        [UIApplication.sharedApplication openURL:[NSURL URLWithString:page] options:@{} completionHandler:nil];
+    }]];
+
+    NSMutableArray<LauncherGroup*>* groups = [NSMutableArray arrayWithObjects:version, actions, nil];
+    NSString* notes = [defaults stringForKey:@"launcher.update.notes"];
+    if ([self isUpdateAvailable] && notes.length > 0)
+    {
+        if (notes.length > 1200)
+            notes = [[notes substringToIndex:1200] stringByAppendingString:@"…"];
+        [groups addObject:[LauncherGroup groupWithHeader:L("IOSLauncher_Update_Notes") footer:notes]];
+    }
+    return groups;
 }
 
 - (NSArray<LauncherGroup*>*)advancedGroups

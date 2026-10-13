@@ -446,12 +446,9 @@ elseif (ANDROID)
     add_library(UnleashedRecomp SHARED ${UNLEASHED_RECOMP_CXX_SOURCES})
     set_target_properties(UnleashedRecomp PROPERTIES OUTPUT_NAME "main")
 elseif (UNLEASHED_RECOMP_IOS)
-    CreateVersionString(
-        VERSION_TXT ${VERSION_TXT}
-        OUTPUT_CSV 1
-        OUTPUT_VAR IOS_BUNDLE_VERSION
-    )
-    string(REPLACE "," "." IOS_BUNDLE_VERSION "${IOS_BUNDLE_VERSION}")
+    # The iOS port is versioned separately from the game (res/version.txt); the
+    # launcher compares this with the fork's ios-v* release tags.
+    set(IOS_BUNDLE_VERSION "0.1.0")
 
     add_executable(UnleashedRecomp MACOSX_BUNDLE ${UNLEASHED_RECOMP_CXX_SOURCES})
     set(UNLEASHED_RECOMP_IOS_ASSET_CATALOG ${CMAKE_CURRENT_SOURCE_DIR}/res/ios/Assets.xcassets)

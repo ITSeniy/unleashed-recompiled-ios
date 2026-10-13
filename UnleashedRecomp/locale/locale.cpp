@@ -1312,6 +1312,102 @@ std::unordered_map<std::string_view, std::unordered_map<ELanguage, std::string>>
         {
             { ELanguage::English, "Install the game first. The layout editor runs inside the game." }
         }
+    },
+    {
+        "IOSLauncher_Section_Updates",
+        {
+            { ELanguage::English, "Updates" }
+        }
+    },
+    {
+        "IOSLauncher_Chip_Update",
+        {
+            { ELanguage::English, "Update available" }
+        }
+    },
+    {
+        "IOSLauncher_Group_Version",
+        {
+            { ELanguage::English, "Version" }
+        }
+    },
+    {
+        "IOSLauncher_Update_Installed",
+        {
+            { ELanguage::English, "Installed" }
+        }
+    },
+    {
+        "IOSLauncher_Update_Latest",
+        {
+            { ELanguage::English, "Latest release" }
+        }
+    },
+    {
+        "IOSLauncher_Update_LastChecked",
+        {
+            { ELanguage::English, "Last checked" }
+        }
+    },
+    {
+        "IOSLauncher_Update_Never",
+        {
+            { ELanguage::English, "Never" }
+        }
+    },
+    {
+        "IOSLauncher_Update_Check",
+        {
+            { ELanguage::English, "Check for updates" }
+        }
+    },
+    {
+        "IOSLauncher_Update_Checking",
+        {
+            { ELanguage::English, "Checking for updates…" }
+        }
+    },
+    {
+        "IOSLauncher_Update_OpenPage",
+        {
+            { ELanguage::English, "Open release page" }
+        }
+    },
+    {
+        "IOSLauncher_Update_Available",
+        {
+            { ELanguage::English, "A new version is available. Download the IPA from the release page and install it with your sideloading tool; your saves and settings are kept." }
+        }
+    },
+    {
+        "IOSLauncher_Update_Current",
+        {
+            { ELanguage::English, "You have the latest version." }
+        }
+    },
+    {
+        "IOSLauncher_Update_NoReleases",
+        {
+            { ELanguage::English, "No release has been published yet." }
+        }
+    },
+    {
+        "IOSLauncher_Update_Failed",
+        {
+            { ELanguage::English, "Couldn't check for updates: {}" }
+        }
+    },
+    {
+        "IOSLauncher_Update_Footer",
+        {
+            { ELanguage::English, "Updates are checked at most every 6 hours when the launcher opens." }
+        }
+    },
+    {
+        "IOSLauncher_Update_Notes",
+        {
+            { ELanguage::English, "What's new" }
+        }
     }
 };
 

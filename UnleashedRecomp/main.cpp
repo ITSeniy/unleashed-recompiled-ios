@@ -341,6 +341,7 @@ int main(int argc, char *argv[])
     }
 #endif
 
+#if !defined(UNLEASHED_RECOMP_IOS) // iOS checks the port's own releases in the launcher.
     // Check the time since the last time an update was checked. Store the new time if the difference is more than six hours.
     constexpr double TimeBetweenUpdateChecksInSeconds = 6 * 60 * 60;
     time_t timeNow = std::time(nullptr);
@@ -352,6 +353,7 @@ int main(int argc, char *argv[])
         Config::LastChecked = timeNow;
         Config::Save();
     }
+#endif
 
     if (Config::ShowConsole)
         os::process::ShowConsole();
