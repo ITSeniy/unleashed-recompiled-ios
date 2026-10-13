@@ -1268,8 +1268,8 @@ static void DrawConfigOptions()
                 hid::TouchGamepad::MinCameraSensitivity, hid::TouchGamepad::DefaultCameraSensitivity, hid::TouchGamepad::MaxCameraSensitivity);
 #endif
             DrawConfigOption(rowCount++, yOffset, &Config::Vibration, true);
-#ifndef __ANDROID__
-            // Window focus is a desktop concept; Android apps pause in background.
+#if !defined(__ANDROID__) && !defined(UNLEASHED_RECOMP_IOS)
+            // Window focus is a desktop concept; mobile apps pause in background.
             DrawConfigOption(rowCount++, yOffset, &Config::AllowBackgroundInput, true);
 #endif
 #if defined(__ANDROID__) || defined(UNLEASHED_RECOMP_IOS)
@@ -1312,16 +1312,19 @@ static void DrawConfigOptions()
 #endif
 
             DrawConfigOption(rowCount++, yOffset, &Config::AspectRatio, true);
+#if defined(UNLEASHED_RECOMP_IOS)
+            DrawConfigOption(rowCount++, yOffset, &Config::MetalFXQuality, true);
+#endif
             DrawConfigOption(rowCount++, yOffset, &Config::ResolutionScale, true, nullptr, 0.25f, 1.0f, 2.0f);
 #if defined(UNLEASHED_RECOMP_IOS)
-            DrawConfigOption(rowCount++, yOffset, &Config::MetalFXUpscaling, true);
             DrawConfigOption(rowCount++, yOffset, &Config::SkipUnusedCopies, true);
             DrawConfigOption(rowCount++, yOffset, &Config::ReuseRenderTargets, true);
 #endif
 #if !defined(__ANDROID__) && (!defined(__APPLE__) || !TARGET_OS_IOS)
             DrawConfigOption(rowCount++, yOffset, &Config::Fullscreen, true);
 #endif
-#ifndef __ANDROID__
+#if !defined(__ANDROID__) && !defined(UNLEASHED_RECOMP_IOS)
+            // iOS always presents in sync with the display.
             DrawConfigOption(rowCount++, yOffset, &Config::VSync, true);
 #endif
 #if defined(__APPLE__) && TARGET_OS_IOS
@@ -1339,8 +1342,8 @@ static void DrawConfigOptions()
             DrawConfigOption(rowCount++, yOffset, &Config::XboxColorCorrection, true);
             DrawConfigOption(rowCount++, yOffset, &Config::CutsceneAspectRatio, true);
             DrawConfigOption(rowCount++, yOffset, &Config::UIAlignmentMode, true);
-#ifdef __ANDROID__
-            // Diagnostic overlays: Android has no F1 key, so they are toggled here
+#if defined(__ANDROID__) || defined(UNLEASHED_RECOMP_IOS)
+            // Diagnostic overlays: mobile has no F1 key, so they are toggled here
             // (moved out of the launcher). They take effect immediately.
             DrawConfigOption(rowCount++, yOffset, &Config::ShowFPS, true);
             DrawConfigOption(rowCount++, yOffset, &Config::ShowProfiler, true);

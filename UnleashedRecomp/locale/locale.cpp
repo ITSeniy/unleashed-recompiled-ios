@@ -1004,7 +1004,7 @@ std::unordered_map<std::string_view, std::unordered_map<ELanguage, std::string>>
     {
         "IOSLauncher_Resolution_Footer",
         {
-            { ELanguage::English, "Lower resolution is faster. MetalFX upscales the picture back to the screen's resolution and keeps it sharp." }
+            { ELanguage::English, "Presets work like DLSS in PC games: Quality renders at 67% of the screen's resolution, Balanced at 58%, Performance at 50% and Ultra Performance at 33%, and MetalFX upscales the result. Moving the slider switches to Custom." }
         }
     },
     {
@@ -1053,24 +1053,6 @@ std::unordered_map<std::string_view, std::unordered_map<ELanguage, std::string>>
         "IOSLauncher_SkipIntro",
         {
             { ELanguage::English, "Skip intro logos" }
-        }
-    },
-    {
-        "IOSLauncher_Group_Testing",
-        {
-            { ELanguage::English, "Testing" }
-        }
-    },
-    {
-        "IOSLauncher_ForceETC2",
-        {
-            { ELanguage::English, "Force ETC2 textures" }
-        }
-    },
-    {
-        "IOSLauncher_Testing_Footer",
-        {
-            { ELanguage::English, "Converts textures to ETC2 as on GPUs without BC support. Loading is slower; use it to test that path." }
         }
     },
     {

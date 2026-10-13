@@ -77,9 +77,10 @@ CONFIG_DEFINE_ENUM_LOCALISED("Video", EAspectRatio, AspectRatio, EAspectRatio::A
 CONFIG_DEFINE_LOCALISED("Video", float, ResolutionScale, 0.5f);
 #elif defined(UNLEASHED_RECOMP_IOS)
 // With MetalFX Spatial and both resolve optimizations, 0.75 held 59-60 FPS for six
-// minutes on A16 but at the edge of the sustained GPU budget; 0.66 keeps headroom.
-CONFIG_DEFINE_LOCALISED("Video", float, ResolutionScale, 0.66f);
-CONFIG_DEFINE_LOCALISED("Video", bool, MetalFXUpscaling, true);
+// minutes on A16 but at the edge of the sustained GPU budget; Quality (0.67) keeps
+// headroom. MetalFXQuality must follow ResolutionScale: its load callback sets the scale.
+CONFIG_DEFINE_LOCALISED("Video", float, ResolutionScale, 0.67f);
+CONFIG_DEFINE_ENUM_LOCALISED("Video", EMetalFXQuality, MetalFXQuality, EMetalFXQuality::Quality);
 // Resolve-copy optimizations; each can be turned off if it causes artifacts.
 CONFIG_DEFINE_LOCALISED("Video", bool, SkipUnusedCopies, true);
 CONFIG_DEFINE_LOCALISED("Video", bool, ReuseRenderTargets, true);

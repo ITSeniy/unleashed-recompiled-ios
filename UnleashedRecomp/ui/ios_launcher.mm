@@ -29,7 +29,6 @@ struct EnvironmentSwitch
 
 static const EnvironmentSwitch g_environmentSwitches[] =
 {
-    { "UNLEASHED_IOS_FORCE_NO_BC", "IOSLauncher_ForceETC2" },
     { "UNLEASHED_IOS_FRAME_DIAGNOSTICS", "IOSLauncher_FrameLog" },
     { "UNLEASHED_IOS_GPU_PASS_DIAGNOSTICS", "IOSLauncher_PassLog" },
     { "UNLEASHED_IOS_RESOLVE_DIAGNOSTICS", "IOSLauncher_ResolveLog" },
@@ -65,6 +64,24 @@ static NSString* L(const char* key)
 static NSString* PathString(const std::filesystem::path& path)
 {
     return [NSString stringWithUTF8String:(const char*)path.u8string().c_str()] ?: @"";
+}
+
+// Game option values are upper case ("ULTRA PERFORMANCE"); iOS menus use sentence
+// case. Mixed-case and caseless (Japanese) labels are left alone.
+static NSString* MenuLabel(const std::string& text)
+{
+    NSString* label = NS(text);
+    if (![label isEqualToString:label.uppercaseString] || [label isEqualToString:label.lowercaseString])
+        return label;
+
+    NSMutableArray<NSString*>* words = [NSMutableArray array];
+    for (NSString* word in [label componentsSeparatedByString:@" "])
+    {
+        static NSSet<NSString*>* const acronyms = [NSSet setWithArray:@[ @"MSAA", @"FXAA", @"TAA", @"FPS", @"HUD", @"DLC", @"GI", @"UI", @"HD" ]];
+        [words addObject:[acronyms containsObject:word] ? word : word.lowercaseString];
+    }
+    NSString* result = [words componentsJoinedByString:@" "];
+    return [[result substringToIndex:1].uppercaseString stringByAppendingString:[result substringFromIndex:1]];
 }
 
 static NSString* OneLine(const std::string& text)
@@ -168,6 +185,8 @@ static LauncherRow* ToggleRow(ConfigDef<bool, isHidden>& def, NSString* title = 
     row.setOn = ^(BOOL on)
     {
         config->Value = on;
+        if (config->Callback)
+            config->Callback(config);
         // Hidden values are only saved once they appear in the config file.
         if constexpr (isHidden)
             config->IsLoadedFromConfig = true;
@@ -183,7 +202,7 @@ static LauncherRow* EnumRow(ConfigDef<T>& def)
     row.kind = LauncherRowMenu;
     row.title = NS(def.GetNameLocalised(Config::Language));
     row.detail = OneLine(def.GetDescription(Config::Language));
-    row.value = ^NSString* { return NS(config->GetValueLocalised(Config::Language)); };
+    row.value = ^NSString* { return MenuLabel(config->GetValueLocalised(Config::Language)); };
     row.menu = ^NSArray<UIMenuElement*>* (void (^changed)(void))
     {
         NSMutableArray<UIMenuElement*>* actions = [NSMutableArray array];
@@ -195,13 +214,16 @@ static LauncherRow* EnumRow(ConfigDef<T>& def)
 
             // The localised name is only exposed for the current value.
             config->Value = value;
-            NSString* label = NS(config->GetValueLocalised(Config::Language));
+            NSString* label = MenuLabel(config->GetValueLocalised(Config::Language));
             config->Value = current;
 
             const T choice = value;
             UIAction* action = [UIAction actionWithTitle:label image:nil identifier:nil handler:^(UIAction*)
             {
                 config->Value = choice;
+                // Linked settings follow, e.g. a MetalFX preset sets the resolution.
+                if (config->Callback)
+                    config->Callback(config);
                 changed();
             }];
             action.state = value == current ? UIMenuElementStateOn : UIMenuElementStateOff;
@@ -559,9 +581,9 @@ static InstallStatus InspectInstallation()
     }
 
     NSMutableArray<NSString*>* parts = [NSMutableArray array];
+    if (Config::MetalFXQuality != EMetalFXQuality::Off && Config::ResolutionScale < 1.0f)
+        [parts addObject:[@"MetalFX " stringByAppendingString:MenuLabel(Config::MetalFXQuality.GetValueLocalised(Config::Language)).lowercaseString]];
     [parts addObject:[NSString stringWithFormat:@"%d%%", int(std::lround(Config::ResolutionScale * 100.0f))]];
-    if (Config::MetalFXUpscaling && Config::ResolutionScale < 1.0f)
-        [parts addObject:@"MetalFX"];
     [parts addObject:[self frameRateLabel:int32_t(Config::FPS)]];
     _summary.text = [parts componentsJoinedByString:@" · "];
 
@@ -582,6 +604,9 @@ static InstallStatus InspectInstallation()
 {
     Config::Save();
     [self updateHome];
+    // The MetalFX preset and the resolution scale change each other.
+    if (_section == 1)
+        [_table reloadSections:[NSIndexSet indexSetWithIndex:0] withRowAnimation:UITableViewRowAnimationNone];
 }
 
 - (void)rebuildGroups
@@ -658,10 +683,14 @@ static InstallStatus InspectInstallation()
     scale.minimum = 0.25f;
     scale.maximum = std::max(1.0f, float(Config::ResolutionScale));
     scale.floatValue = ^float { return Config::ResolutionScale; };
-    scale.setFloatValue = ^(float value) { Config::ResolutionScale = std::round(value * 100.0f) / 100.0f; };
+    scale.setFloatValue = ^(float value)
+    {
+        Config::ResolutionScale = std::round(value * 100.0f) / 100.0f;
+        Config::ResolutionScale.Callback(&Config::ResolutionScale);
+    };
     scale.formatFloat = ^NSString* (float value) { return [NSString stringWithFormat:@"%d%%", int(std::lround(value * 100.0f))]; };
+    [resolution.rows addObject:EnumRow(Config::MetalFXQuality)];
     [resolution.rows addObject:scale];
-    [resolution.rows addObject:ToggleRow(Config::MetalFXUpscaling)];
 
     LauncherGroup* frameRate = [LauncherGroup groupWithHeader:L("IOSLauncher_Group_FrameRate") footer:nil];
     LauncherRow* fps = [LauncherRow new];
@@ -693,7 +722,6 @@ static InstallStatus InspectInstallation()
         return actions;
     };
     [frameRate.rows addObject:fps];
-    [frameRate.rows addObject:ToggleRow(Config::VSync)];
 
     LauncherGroup* quality = [LauncherGroup groupWithHeader:L("IOSLauncher_Group_Quality") footer:nil];
     [quality.rows addObject:EnumRow(Config::AntiAliasing)];
@@ -710,6 +738,7 @@ static InstallStatus InspectInstallation()
 
     LauncherGroup* overlays = [LauncherGroup groupWithHeader:L("IOSLauncher_Group_Overlays") footer:L("IOSLauncher_Overlays_Footer")];
     [overlays.rows addObject:ToggleRow(Config::ShowFPS)];
+    [overlays.rows addObject:ToggleRow(Config::ShowProfiler)];
     [overlays.rows addObject:ToggleRow(Config::MetalHUD, @"Metal HUD")];
 
     return @[ resolution, frameRate, quality, optimizations, overlays ];
@@ -1035,17 +1064,14 @@ static InstallStatus InspectInstallation()
     LauncherGroup* gameplay = [LauncherGroup groupWithHeader:L("IOSLauncher_Group_Startup") footer:nil];
     [gameplay.rows addObject:ToggleRow(Config::SkipIntroLogos, L("IOSLauncher_SkipIntro"))];
 
-    LauncherGroup* testing = [LauncherGroup groupWithHeader:L("IOSLauncher_Group_Testing") footer:L("IOSLauncher_Testing_Footer")];
-    [testing.rows addObject:[self environmentRow:g_environmentSwitches[0]]];
-
     LauncherGroup* diagnostics = [LauncherGroup groupWithHeader:L("IOSLauncher_Group_Diagnostics") footer:L("IOSLauncher_Diagnostics_Footer")];
-    for (size_t i = 1; i < std::size(g_environmentSwitches); i++)
-        [diagnostics.rows addObject:[self environmentRow:g_environmentSwitches[i]]];
+    for (const auto& item : g_environmentSwitches)
+        [diagnostics.rows addObject:[self environmentRow:item]];
 
     LauncherGroup* log = [LauncherGroup groupWithHeader:nil footer:nil];
     [log.rows addObject:[self actionRow:L("IOSLauncher_ShareLog") symbol:@"square.and.arrow.up" action:^(UIView* source) { [weakSelf shareLog:source]; }]];
 
-    return @[ gameplay, testing, diagnostics, log ];
+    return @[ gameplay, diagnostics, log ];
 }
 
 - (LauncherRow*)environmentRow:(const EnvironmentSwitch&)item
@@ -1147,31 +1173,36 @@ static InstallStatus InspectInstallation()
 
     case LauncherRowMenu:
     {
-        UIButtonConfiguration* config = [UIButtonConfiguration plainButtonConfiguration];
-        config.title = row.value();
-        config.image = [UIImage systemImageNamed:@"chevron.up.chevron.down"];
-        config.imagePlacement = NSDirectionalRectEdgeTrailing;
-        config.imagePadding = 4;
-        config.preferredSymbolConfigurationForImage = [UIImageSymbolConfiguration configurationWithScale:UIImageSymbolScaleSmall];
-        UIButton* button = [UIButton buttonWithConfiguration:config primaryAction:nil];
-        __weak UIButton* weakButton = button;
+        // As in Settings: the title gets the full width, the current value sits
+        // below it, and a tap anywhere in the row opens the menu. The narrow
+        // landscape list leaves no room for both side by side.
+        content.secondaryText = row.value();
+        content.secondaryTextProperties.color = self.view.tintColor;
+        content.secondaryTextProperties.numberOfLines = 1;
+        UIImageView* chevron = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"chevron.up.chevron.down"
+            withConfiguration:[UIImageSymbolConfiguration configurationWithScale:UIImageSymbolScaleSmall]]];
+        chevron.tintColor = UIColor.tertiaryLabelColor;
+        cell.accessoryView = chevron;
+
+        UIButton* button = [UIButton buttonWithType:UIButtonTypeCustom];
+        button.frame = cell.bounds;
+        button.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+        __weak UITableView* weakTable = tableView;
         void (^changed)(void) = ^
         {
-            UIButtonConfiguration* updated = weakButton.configuration;
-            updated.title = row.value();
-            weakButton.configuration = updated;
-            [weakButton sizeToFit];
             [weakSelf settingsChanged];
+            [weakTable reloadRowsAtIndexPaths:@[ indexPath ] withRowAnimation:UITableViewRowAnimationNone];
         };
-        // Rebuild on every open so the checkmark follows the current value.
-        button.menu = [UIMenu menuWithChildren:@[ [UIDeferredMenuElement elementWithUncachedProvider:^(void (^completion)(NSArray<UIMenuElement*>*))
+        // Rebuilt on every open so the checkmark follows the current value; the
+        // description replaces the row's second line as the menu title.
+        button.menu = [UIMenu menuWithTitle:row.detail ?: @"" children:@[ [UIDeferredMenuElement elementWithUncachedProvider:^(void (^completion)(NSArray<UIMenuElement*>*))
         {
             completion(row.menu(changed));
         }] ]];
         button.showsMenuAsPrimaryAction = YES;
-        [button sizeToFit];
-        cell.accessoryView = button;
-        break;
+        [cell addSubview:button];
+        cell.contentConfiguration = content;
+        return cell;
     }
 
     case LauncherRowSlider:

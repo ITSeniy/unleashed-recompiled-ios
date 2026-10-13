@@ -387,11 +387,22 @@ static uint32_t g_statPipelineBinds;
 static uint32_t g_statBarrierCalls;
 static uint32_t g_statFramebufferSets;
 
-// On Android there is no F1 key: the initial state comes from Config::ShowProfiler
-// (launcher checkbox), and closing the overlay writes the config back so it stays
-// closed on the next launch (issue #46). See DrawProfiler.
+// On mobile there is no F1 key: the overlay follows Config::ShowProfiler (launcher
+// and Video menu), and closing it writes the config back so it stays closed on the
+// next launch (issue #46). See DrawProfiler.
 static bool g_profilerVisible;
 static bool g_profilerWasToggled;
+static bool g_profilerConfigShown;
+
+// iOS presents in sync with the display; VSync off only selected a worse timer.
+static bool IsVSyncEnabled()
+{
+#if defined(UNLEASHED_RECOMP_IOS)
+    return true;
+#else
+    return Config::VSync;
+#endif
+}
 
 #if !defined(UNLEASHED_RECOMP_D3D12) && !defined(UNLEASHED_RECOMP_METAL)
 static constexpr Backend g_backend = Backend::VULKAN;
@@ -484,7 +495,7 @@ static bool IOSMetalFXRequested()
         const char* value = std::getenv("UNLEASHED_IOS_METALFX_SPATIAL");
         return value == nullptr ? -1 : int(value[0] == '1');
     }();
-    return (forced < 0 ? bool(Config::MetalFXUpscaling) : forced == 1) || IOSTemporalRequested();
+    return (forced < 0 ? Config::MetalFXQuality != EMetalFXQuality::Off : forced == 1) || IOSTemporalRequested();
 }
 
 // UNLEASHED_IOS_GPU_PASS_DIAGNOSTICS=1: name the next render pass in sampled frames.
@@ -1831,7 +1842,7 @@ static void CheckSwapChain()
     static bool loggedFirstDrawable = false;
 #endif
 
-    g_swapChain->setVsyncEnabled(Config::VSync);
+    g_swapChain->setVsyncEnabled(IsVSyncEnabled());
     const bool needsResize = g_swapChain->needsResize();
 
 #if defined(__ANDROID__)
@@ -2457,7 +2468,7 @@ bool Video::CreateHostDevice(const char *sdlVideoDriver, bool graphicsApiRetry)
     }
 
     g_swapChain = g_queue->createSwapChain(GameWindow::s_renderWindow, bufferCount, BACKBUFFER_FORMAT, Config::MaxFrameLatency);
-    g_swapChain->setVsyncEnabled(Config::VSync);
+    g_swapChain->setVsyncEnabled(IsVSyncEnabled());
     g_swapChainValid = !g_swapChain->needsResize();
 
 #if defined(__ANDROID__)
@@ -2967,12 +2978,11 @@ static const char *DeviceTypeName(RenderDeviceType type)
 
 static void DrawProfiler()
 {
-#ifdef __ANDROID__
-    static bool s_profilerVisibilityInitialized;
-    if (!s_profilerVisibilityInitialized)
+#if defined(__ANDROID__) || defined(UNLEASHED_RECOMP_IOS)
+    if (Config::ShowProfiler != g_profilerConfigShown)
     {
-        g_profilerVisible = Config::ShowProfiler;
-        s_profilerVisibilityInitialized = true;
+        g_profilerConfigShown = Config::ShowProfiler;
+        g_profilerVisible = g_profilerConfigShown;
     }
 #endif
 
@@ -3134,12 +3144,13 @@ static void DrawProfiler()
     }
     ImGui::End();
 
-#ifdef __ANDROID__
-    // Closing the overlay with its X button is the only in-game toggle on Android;
-    // persist it so the window does not come back on every launch (issue #46).
+#if defined(__ANDROID__) || defined(UNLEASHED_RECOMP_IOS)
+    // Closing the overlay with its X button turns the option off and persists it,
+    // so the window does not come back on every launch (issue #46).
     if (!g_profilerVisible && Config::ShowProfiler)
     {
         Config::ShowProfiler.Value = false;
+        g_profilerConfigShown = false;
         Config::Save();
     }
 #endif
@@ -4001,7 +4012,7 @@ void Video::Present()
     }();
     // iOS never tears, so VSync off only selects the timer. Below 60 FPS that
     // timer drifts against refreshes too; keep it for higher caps only.
-    const bool useMetalPacing = g_backend == Backend::METAL && usePresentDuration && (Config::VSync || Config::FPS < 60) &&
+    const bool useMetalPacing = g_backend == Backend::METAL && usePresentDuration && (IsVSyncEnabled() || Config::FPS < 60) &&
         Config::FPS >= FPS_MIN && Config::FPS < FPS_MAX;
     plume::setMetalPresentMinimumDuration(useMetalPacing ? 1.0 / Config::FPS : 0.0);
     IOSFrameTimingSample frameTiming;
@@ -9582,6 +9593,9 @@ void VideoConfigValueChangedCallback(IConfigDef* config)
     g_needsResize |=
         config == &Config::AspectRatio ||
         config == &Config::ResolutionScale ||
+#if defined(UNLEASHED_RECOMP_IOS)
+        config == &Config::MetalFXQuality ||
+#endif
         config == &Config::AntiAliasing ||
         config == &Config::ShadowResolution;
 

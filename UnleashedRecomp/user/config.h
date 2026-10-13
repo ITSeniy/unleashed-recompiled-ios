@@ -83,6 +83,31 @@ enum class EAndroidTouchStickMode : uint32_t
     Dpad
 };
 
+// DLSS-style MetalFX presets. Each fixed preset sets Resolution Scale; changing the
+// scale by hand switches to Custom. Off keeps the scale and disables MetalFX.
+enum class EMetalFXQuality : uint32_t
+{
+    Off,
+    Quality,
+    Balanced,
+    Performance,
+    UltraPerformance,
+    Custom
+};
+
+// Internal resolution of a fixed preset, or 0 for Off and Custom.
+inline float GetMetalFXQualityScale(EMetalFXQuality quality)
+{
+    switch (quality)
+    {
+    case EMetalFXQuality::Quality:          return 0.67f;
+    case EMetalFXQuality::Balanced:         return 0.58f;
+    case EMetalFXQuality::Performance:      return 0.5f;
+    case EMetalFXQuality::UltraPerformance: return 0.33f;
+    default:                                return 0.0f;
+    }
+}
+
 enum class EChannelConfiguration : uint32_t
 {
     Stereo,

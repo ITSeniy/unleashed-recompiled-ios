@@ -686,13 +686,72 @@ CONFIG_DEFINE_LOCALE(ResolutionScale)
 };
 
 #if defined(UNLEASHED_RECOMP_IOS)
-CONFIG_DEFINE_LOCALE(MetalFXUpscaling)
+CONFIG_DEFINE_LOCALE(MetalFXQuality)
 {
-    { ELanguage::English,  { "MetalFX Upscaling", "Upscale the internal resolution to the screen with Apple MetalFX for a sharper image.\n\nOnly applies when Resolution Scale is below 100%." } },
-    { ELanguage::German,   { "MetalFX-Hochskalierung", "Skaliert die interne Auflösung mit Apple MetalFX auf den Bildschirm hoch, um ein schärferes Bild zu erhalten.\n\nWirkt nur, wenn die Rendering-Auflösung unter 100 % liegt." } },
-    { ELanguage::French,   { "Mise à l'échelle MetalFX", "Agrandit la résolution interne à celle de l'écran avec Apple MetalFX pour une image plus nette.\n\nNe s'applique que si l'échelle de rendu est inférieure à 100 %." } },
-    { ELanguage::Spanish,  { "Escalado MetalFX", "Escala la resolución interna a la de la pantalla con Apple MetalFX para una imagen más nítida.\n\nSolo se aplica si la escala de resolución es inferior al 100 %." } },
-    { ELanguage::Italian,  { "Upscaling MetalFX", "Scala la risoluzione interna a quella dello schermo con Apple MetalFX per un'immagine più nitida.\n\nSi applica solo se la scala risoluzione è inferiore al 100%." } }
+    { ELanguage::English,  { "MetalFX Upscaling", "Render below the screen's resolution and upscale with Apple MetalFX. Lower presets run faster but look softer.\n\nChanging Resolution Scale switches to Custom." } },
+    { ELanguage::German,   { "MetalFX-Hochskalierung", "Rendert unter der Bildschirmauflösung und skaliert mit Apple MetalFX hoch. Niedrigere Stufen laufen schneller, wirken aber weicher.\n\nEine geänderte Rendering-Auflösung wechselt zu Benutzerdefiniert." } },
+    { ELanguage::French,   { "Mise à l'échelle MetalFX", "Rend sous la résolution de l'écran et agrandit l'image avec Apple MetalFX. Les préréglages bas sont plus rapides mais plus flous.\n\nModifier l'échelle de rendu passe en Personnalisé." } },
+    { ELanguage::Spanish,  { "Escalado MetalFX", "Renderiza por debajo de la resolución de la pantalla y escala con Apple MetalFX. Los ajustes bajos van más rápido pero se ven más suaves.\n\nCambiar la escala de resolución pasa a Personalizado." } },
+    { ELanguage::Italian,  { "Upscaling MetalFX", "Esegue il rendering sotto la risoluzione dello schermo e scala con Apple MetalFX. Le preimpostazioni basse sono più veloci ma meno nitide.\n\nCambiare la scala risoluzione passa a Personalizzato." } }
+};
+
+CONFIG_DEFINE_ENUM_LOCALE(EMetalFXQuality)
+{
+    {
+        ELanguage::English,
+        {
+            { EMetalFXQuality::Off,              { "OFF", "Off: render at Resolution Scale without MetalFX." } },
+            { EMetalFXQuality::Quality,          { "QUALITY", "Quality: render at 67% of the screen's resolution." } },
+            { EMetalFXQuality::Balanced,         { "BALANCED", "Balanced: render at 58% of the screen's resolution." } },
+            { EMetalFXQuality::Performance,      { "PERFORMANCE", "Performance: render at 50% of the screen's resolution." } },
+            { EMetalFXQuality::UltraPerformance, { "ULTRA PERF.", "Ultra Performance: render at 33% of the screen's resolution." } },
+            { EMetalFXQuality::Custom,           { "CUSTOM", "Custom: upscale from the chosen Resolution Scale." } }
+        }
+    },
+    {
+        ELanguage::German,
+        {
+            { EMetalFXQuality::Off,              { "AUS", "Aus: rendert mit der Rendering-Auflösung ohne MetalFX." } },
+            { EMetalFXQuality::Quality,          { "QUALITÄT", "Qualität: rendert mit 67 % der Bildschirmauflösung." } },
+            { EMetalFXQuality::Balanced,         { "AUSGEWOGEN", "Ausgewogen: rendert mit 58 % der Bildschirmauflösung." } },
+            { EMetalFXQuality::Performance,      { "LEISTUNG", "Leistung: rendert mit 50 % der Bildschirmauflösung." } },
+            { EMetalFXQuality::UltraPerformance, { "ULTRA-LEISTUNG", "Ultra-Leistung: rendert mit 33 % der Bildschirmauflösung." } },
+            { EMetalFXQuality::Custom,           { "EIGENE", "Benutzerdefiniert: skaliert von der gewählten Rendering-Auflösung hoch." } }
+        }
+    },
+    {
+        ELanguage::French,
+        {
+            { EMetalFXQuality::Off,              { "DÉSACTIVÉ", "Désactivé : rend à l'échelle de rendu sans MetalFX." } },
+            { EMetalFXQuality::Quality,          { "QUALITÉ", "Qualité : rend à 67 % de la résolution de l'écran." } },
+            { EMetalFXQuality::Balanced,         { "ÉQUILIBRÉ", "Équilibré : rend à 58 % de la résolution de l'écran." } },
+            { EMetalFXQuality::Performance,      { "PERFORMANCE", "Performance : rend à 50 % de la résolution de l'écran." } },
+            { EMetalFXQuality::UltraPerformance, { "ULTRA PERF.", "Ultra performance : rend à 33 % de la résolution de l'écran." } },
+            { EMetalFXQuality::Custom,           { "PERSONNALISÉ", "Personnalisé : agrandit depuis l'échelle de rendu choisie." } }
+        }
+    },
+    {
+        ELanguage::Spanish,
+        {
+            { EMetalFXQuality::Off,              { "NO", "No: renderiza a la escala de resolución sin MetalFX." } },
+            { EMetalFXQuality::Quality,          { "CALIDAD", "Calidad: renderiza al 67 % de la resolución de la pantalla." } },
+            { EMetalFXQuality::Balanced,         { "EQUILIBRADO", "Equilibrado: renderiza al 58 % de la resolución de la pantalla." } },
+            { EMetalFXQuality::Performance,      { "RENDIMIENTO", "Rendimiento: renderiza al 50 % de la resolución de la pantalla." } },
+            { EMetalFXQuality::UltraPerformance, { "ULTRA REND.", "Ultra rendimiento: renderiza al 33 % de la resolución de la pantalla." } },
+            { EMetalFXQuality::Custom,           { "PERSONALIZADO", "Personalizado: escala desde la escala de resolución elegida." } }
+        }
+    },
+    {
+        ELanguage::Italian,
+        {
+            { EMetalFXQuality::Off,              { "NO", "No: esegue il rendering alla scala risoluzione senza MetalFX." } },
+            { EMetalFXQuality::Quality,          { "QUALITÀ", "Qualità: esegue il rendering al 67% della risoluzione dello schermo." } },
+            { EMetalFXQuality::Balanced,         { "BILANCIATO", "Bilanciato: esegue il rendering al 58% della risoluzione dello schermo." } },
+            { EMetalFXQuality::Performance,      { "PRESTAZIONI", "Prestazioni: esegue il rendering al 50% della risoluzione dello schermo." } },
+            { EMetalFXQuality::UltraPerformance, { "ULTRA PREST.", "Ultra prestazioni: esegue il rendering al 33% della risoluzione dello schermo." } },
+            { EMetalFXQuality::Custom,           { "PERSONALIZZATO", "Personalizzato: scala dalla scala risoluzione scelta." } }
+        }
+    }
 };
 
 CONFIG_DEFINE_LOCALE(SkipUnusedCopies)

@@ -55,6 +55,16 @@ CONFIG_DEFINE_ENUM_TEMPLATE(EAndroidTouchCameraMode)
     { "Off",         EAndroidTouchCameraMode::Off }
 };
 
+CONFIG_DEFINE_ENUM_TEMPLATE(EMetalFXQuality)
+{
+    { "Off",               EMetalFXQuality::Off },
+    { "Quality",           EMetalFXQuality::Quality },
+    { "Balanced",          EMetalFXQuality::Balanced },
+    { "Performance",       EMetalFXQuality::Performance },
+    { "Ultra Performance", EMetalFXQuality::UltraPerformance },
+    { "Custom",            EMetalFXQuality::Custom }
+};
+
 CONFIG_DEFINE_ENUM_TEMPLATE(EAndroidTouchStickMode)
 {
     { "Analog", EAndroidTouchStickMode::Analog },
@@ -865,7 +875,20 @@ void Config::CreateCallbacks()
     Config::ResolutionScale.Callback = [](ConfigDef<float>* def)
     {
         def->Value = std::clamp(def->Value, 0.25f, 2.0f);
+#if defined(UNLEASHED_RECOMP_IOS)
+        // A hand-picked scale leaves the fixed presets.
+        const float presetScale = GetMetalFXQualityScale(Config::MetalFXQuality);
+        if (presetScale > 0.0f && std::abs(def->Value - presetScale) > 0.005f)
+            Config::MetalFXQuality.Value = EMetalFXQuality::Custom;
+#endif
     };
+#if defined(UNLEASHED_RECOMP_IOS)
+    Config::MetalFXQuality.Callback = [](ConfigDef<EMetalFXQuality>* def)
+    {
+        if (const float scale = GetMetalFXQualityScale(def->Value); scale > 0.0f)
+            Config::ResolutionScale.Value = scale;
+    };
+#endif
 }
 
 void Config::Load()
