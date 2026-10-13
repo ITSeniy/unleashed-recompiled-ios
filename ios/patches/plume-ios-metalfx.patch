@@ -1,0 +1,364 @@
+diff --git a/plume_metal.cpp b/plume_metal.cpp
+--- a/plume_metal.cpp
++++ b/plume_metal.cpp
+@@ -23,6 +23,11 @@
+ #include "plume_metal.h"
+ #include "plume_metal_diagnostics.h"
+ #include "plume_metal_lifecycle.h"
++#include "plume_metal_upscaling.h"
++#if TARGET_OS_IPHONE
++#define MTLFX_PRIVATE_IMPLEMENTATION
++#include <MetalFX/MetalFX.hpp>
++#endif
+ 
+ extern "C" {
+     void *objc_autoreleasePoolPush(void);
+@@ -1062,7 +1067,9 @@
+             uint32_t width = 0, height = 0, draws = 0, index = 0;
+             bool depth = false;
+             double vertexMs = 0.0, fragmentMs = 0.0, spanMs = 0.0;
++            std::string label; // Shader names of the pass's first draw, if the app supplied them.
+         };
++        std::string pendingLabel;
+         static constexpr uint32_t MaxPasses = 256;
+         NS::SharedPtr<MTL::CounterSampleBuffer> samples;
+         std::vector<Pass> passes;
+@@ -1107,17 +1114,18 @@
+                 pass.spanMs = double(last - first) * tickToMs;
+                 vertexSum += pass.vertexMs; fragmentSum += pass.fragmentMs; ++valid;
+             }
+-            char message[320]{};
++            char message[512]{};
+             snprintf(message, sizeof(message),
+                 "Metal pass profile: passes=%zu, valid=%u, gpu=%.3f ms, vertexSum=%.3f ms, fragmentSum=%.3f ms (stages may overlap)",
+                 passes.size(), valid, 1000.0 * (buffer->GPUEndTime() - buffer->GPUStartTime()), vertexSum, fragmentSum);
+             reportMetalDiagnostic(message, false);
+             std::sort(passes.begin(), passes.end(), [](const Pass &a, const Pass &b) { return a.fragmentMs > b.fragmentMs; });
+-            for (size_t i = 0; i < std::min(size_t(8), passes.size()); ++i) {
++            for (size_t i = 0; i < passes.size(); ++i) {
+                 const auto &pass = passes[i];
+                 snprintf(message, sizeof(message),
+-                    "Metal pass cost: pass=%u, size=%ux%u, draws=%u, depth=%u, vertex=%.3f ms, fragment=%.3f ms, span=%.3f ms",
+-                    pass.index, pass.width, pass.height, pass.draws, pass.depth, pass.vertexMs, pass.fragmentMs, pass.spanMs);
++                    "Metal pass cost: pass=%u, size=%ux%u, draws=%u, depth=%u, vertex=%.3f ms, fragment=%.3f ms, span=%.3f ms, first=%s",
++                    pass.index, pass.width, pass.height, pass.draws, pass.depth, pass.vertexMs, pass.fragmentMs, pass.spanMs,
++                    pass.label.empty() ? "-" : pass.label.c_str());
+                 reportMetalDiagnostic(message, false);
+             }
+         }
+@@ -1147,6 +1155,256 @@
+         device->mtl->sampleTimestamps(&profile->cpuStart, &profile->gpuStart);
+         return profile;
+     }
++
++#if TARGET_OS_IPHONE
++    struct MetalSpatialState {
++        NS::SharedPtr<MTLFX::SpatialScaler> scaler;
++        NS::SharedPtr<MTL::Device> device;
++        uint32_t inputWidth = 0, inputHeight = 0, outputWidth = 0, outputHeight = 0;
++        RenderFormat format = RenderFormat::UNKNOWN;
++    };
++
++    // Preparation also occurs during initial device setup; encoding runs on the render thread.
++    // Keep an old scaler alive
++    // through completion even if a later frame replaces its cached descriptor.
++    static std::shared_ptr<MetalSpatialState> &metalSpatialState() {
++        static std::shared_ptr<MetalSpatialState> state;
++        return state;
++    }
++
++    static std::mutex &metalSpatialMutex() { static std::mutex mutex; return mutex; }
++
++    void setMetalPassDiagnosticLabel(RenderCommandList *renderList, const char *label) {
++        auto *list = static_cast<MetalCommandList *>(renderList);
++        if (list->passDiagnostics) list->passDiagnostics->pendingLabel = label;
++    }
++
++    bool prepareMetalSpatialUpscaling(RenderDevice *renderDevice, uint32_t inputWidth, uint32_t inputHeight,
++        uint32_t outputWidth, uint32_t outputHeight, RenderFormat format) {
++        MetalAutoreleasePool releasePool;
++        auto *device = static_cast<MetalDevice *>(renderDevice);
++        if (inputWidth == 0 || inputHeight == 0 || outputWidth < inputWidth || outputHeight < inputHeight ||
++            !MTLFX::SpatialScalerDescriptor::supportsDevice(device->mtl)) return false;
++        std::lock_guard lock(metalSpatialMutex());
++        auto &cached = metalSpatialState();
++        if (cached && cached->device.get() == device->mtl && cached->format == format &&
++            cached->inputWidth == inputWidth && cached->inputHeight == inputHeight &&
++            cached->outputWidth == outputWidth && cached->outputHeight == outputHeight) return true;
++        auto state = std::make_shared<MetalSpatialState>();
++        auto descriptor = NS::TransferPtr(MTLFX::SpatialScalerDescriptor::alloc()->init());
++        descriptor->setInputWidth(inputWidth);
++        descriptor->setInputHeight(inputHeight);
++        descriptor->setOutputWidth(outputWidth);
++        descriptor->setOutputHeight(outputHeight);
++        descriptor->setColorTextureFormat(mapPixelFormat(format));
++        descriptor->setOutputTextureFormat(mapPixelFormat(format));
++        descriptor->setColorProcessingMode(MTLFX::SpatialScalerColorProcessingModePerceptual);
++        state->scaler = NS::TransferPtr(descriptor->newSpatialScaler(device->mtl));
++        if (!state->scaler) {
++            reportMetalDiagnostic("MetalFX spatial scaler unavailable; keeping original renderer.", false);
++            return false;
++        }
++        state->device = NS::RetainPtr(device->mtl);
++        state->inputWidth = inputWidth; state->inputHeight = inputHeight;
++        state->outputWidth = outputWidth; state->outputHeight = outputHeight; state->format = format;
++        cached = state;
++        char message[200]{};
++        snprintf(message, sizeof(message), "MetalFX spatial prepared: %ux%u -> %ux%u, perceptual LDR",
++            inputWidth, inputHeight, outputWidth, outputHeight);
++        reportMetalDiagnostic(message, false);
++        return true;
++    }
++
++    void encodeMetalSpatialUpscaling(RenderCommandList *renderList, const RenderTexture *source, const RenderTexture *destination) {
++        MetalAutoreleasePool releasePool;
++        auto *list = static_cast<MetalCommandList *>(renderList);
++        std::shared_ptr<MetalSpatialState> state;
++        { std::lock_guard lock(metalSpatialMutex()); state = metalSpatialState(); }
++        assert(state && state->scaler);
++        auto input = NS::RetainPtr(static_cast<const ExtendedRenderTexture *>(source)->getTexture());
++        auto output = NS::RetainPtr(static_cast<const ExtendedRenderTexture *>(destination)->getTexture());
++        assert(input->width() == state->inputWidth && input->height() == state->inputHeight);
++        assert(output->width() == state->outputWidth && output->height() == state->outputHeight);
++        assert((input->usage() & state->scaler->colorTextureUsage()) == state->scaler->colorTextureUsage());
++        assert((output->usage() & state->scaler->outputTextureUsage()) == state->scaler->outputTextureUsage());
++        // These non-heap MetalTexture allocations use tracked hazards. Finish
++        // the old encoder; MetalFX tracks its directly bound input/output textures.
++        list->endOtherEncoders(EncoderType::None);
++        state->scaler->setColorTexture(input.get());
++        state->scaler->setOutputTexture(output.get());
++        state->scaler->setInputContentWidth(state->inputWidth);
++        state->scaler->setInputContentHeight(state->inputHeight);
++        state->scaler->encodeToCommandBuffer(list->mtl);
++        // Plume uses unretained command buffers. Retain every external resource
++        // and the scaler until GPU completion, independently of the next frame.
++        list->mtl->addCompletedHandler([state, input, output](MTL::CommandBuffer *) {});
++    }
++
++    struct MetalTemporalState {
++        NS::SharedPtr<MTLFX::TemporalScaler> scaler;
++        NS::SharedPtr<MTL::Device> device;
++        NS::SharedPtr<MTL::ComputePipelineState> decodeDepth, decodeColorDepth;
++        NS::SharedPtr<MTL::Texture> depth, motion;
++        uint32_t inputWidth = 0, inputHeight = 0, outputWidth = 0, outputHeight = 0;
++        RenderFormat format = RenderFormat::UNKNOWN;
++        bool inputsReady = false;
++    };
++    static std::shared_ptr<MetalTemporalState> &metalTemporalState() {
++        static std::shared_ptr<MetalTemporalState> state;
++        return state;
++    }
++    static std::mutex &metalTemporalMutex() { static std::mutex mutex; return mutex; }
++
++    bool prepareMetalTemporalUpscaling(RenderDevice *renderDevice, uint32_t iw, uint32_t ih,
++        uint32_t ow, uint32_t oh, RenderFormat format) {
++        MetalAutoreleasePool releasePool;
++        auto *device = static_cast<MetalDevice *>(renderDevice);
++        if (!iw || !ih || ow < iw || oh < ih || !MTLFX::TemporalScalerDescriptor::supportsDevice(device->mtl)) return false;
++        std::lock_guard lock(metalTemporalMutex());
++        auto &cached = metalTemporalState();
++        if (cached && cached->device.get() == device->mtl && cached->format == format &&
++            cached->inputWidth == iw && cached->inputHeight == ih && cached->outputWidth == ow && cached->outputHeight == oh) return true;
++        auto state = std::make_shared<MetalTemporalState>();
++        auto descriptor = NS::TransferPtr(MTLFX::TemporalScalerDescriptor::alloc()->init());
++        descriptor->setInputWidth(iw); descriptor->setInputHeight(ih);
++        descriptor->setOutputWidth(ow); descriptor->setOutputHeight(oh);
++        descriptor->setColorTextureFormat(mapPixelFormat(format));
++        descriptor->setOutputTextureFormat(mapPixelFormat(format));
++        descriptor->setDepthTextureFormat(MTL::PixelFormatR32Float);
++        descriptor->setMotionTextureFormat(MTL::PixelFormatRG16Float);
++        descriptor->setAutoExposureEnabled(false);
++        state->scaler = NS::TransferPtr(descriptor->newTemporalScaler(device->mtl));
++        if (!state->scaler) {
++            reportMetalDiagnostic("MetalFX temporal scaler unavailable; using Spatial.", false);
++            return false;
++        }
++        // The game packs signed UV velocity into XZ high / YW low bytes.
++        // Convert both the velocity and real scene depth before those transient
++        // resources are reused. The legacy velocity field is current-minus-previous;
++        // MetalFX receives negative pixel scales for current-to-previous motion.
++        const char *decodeSource = R"METAL(
++            #include <metal_stdlib>
++            using namespace metal;
++            inline void storeInputs(float4 packed, float z,
++                texture2d<float, access::write> motion, texture2d<float, access::write> depth, uint2 gid) {
++                float2 v = (packed.xz + packed.yw / 255.0f) * 2.0f - 1.0f;
++                v = select(float2(0), v, isfinite(v));
++                motion.write(float4(v,0,0),gid);
++                depth.write(float4(clamp(z,0.0f,1.0f)),gid);
++            }
++            kernel void decodeDepth(texture2d<float, access::sample> velocity [[texture(0)]],
++                depth2d<float, access::sample> sourceDepth [[texture(1)]],
++                texture2d<float, access::write> motion [[texture(2)]], texture2d<float, access::write> depth [[texture(3)]],
++                uint2 gid [[thread_position_in_grid]]) {
++                if (gid.x >= motion.get_width() || gid.y >= motion.get_height()) return;
++                constexpr sampler nearest(coord::normalized, address::clamp_to_edge, filter::nearest);
++                float2 uv = (float2(gid)+0.5f)/float2(motion.get_width(),motion.get_height());
++                storeInputs(velocity.sample(nearest,uv),sourceDepth.sample(nearest,uv),motion,depth,gid);
++            }
++            kernel void decodeColorDepth(texture2d<float, access::sample> velocity [[texture(0)]],
++                texture2d<float, access::sample> sourceDepth [[texture(1)]],
++                texture2d<float, access::write> motion [[texture(2)]], texture2d<float, access::write> depth [[texture(3)]],
++                uint2 gid [[thread_position_in_grid]]) {
++                if (gid.x >= motion.get_width() || gid.y >= motion.get_height()) return;
++                constexpr sampler nearest(coord::normalized, address::clamp_to_edge, filter::nearest);
++                float2 uv = (float2(gid)+0.5f)/float2(motion.get_width(),motion.get_height());
++                storeInputs(velocity.sample(nearest,uv),sourceDepth.sample(nearest,uv).x,motion,depth,gid);
++            }
++        )METAL";
++        NS::Error *error = nullptr;
++        auto library = NS::TransferPtr(device->mtl->newLibrary(NS::String::string(decodeSource, NS::UTF8StringEncoding), nullptr, &error));
++        if (!library) {
++            reportMetalDiagnostic(error ? error->localizedDescription()->utf8String() : "MetalFX input conversion compilation failed.", false);
++            return false;
++        }
++        auto makePipeline = [&](const char *name) {
++            auto function = NS::TransferPtr(library->newFunction(NS::String::string(name, NS::UTF8StringEncoding)));
++            return NS::TransferPtr(device->mtl->newComputePipelineState(function.get(), &error));
++        };
++        state->decodeDepth = makePipeline("decodeDepth");
++        state->decodeColorDepth = makePipeline("decodeColorDepth");
++        if (!state->decodeDepth || !state->decodeColorDepth) return false;
++        auto makeTexture = [&](MTL::PixelFormat pf, MTL::TextureUsage required) {
++            auto desc = NS::RetainPtr(MTL::TextureDescriptor::texture2DDescriptor(pf, iw, ih, false));
++            desc->setStorageMode(MTL::StorageModePrivate);
++            desc->setUsage(required | MTL::TextureUsageShaderRead | MTL::TextureUsageShaderWrite);
++            desc->setHazardTrackingMode(MTL::HazardTrackingModeTracked);
++            return NS::TransferPtr(device->mtl->newTexture(desc.get()));
++        };
++        state->motion = makeTexture(MTL::PixelFormatRG16Float, state->scaler->motionTextureUsage());
++        state->depth = makeTexture(MTL::PixelFormatR32Float, state->scaler->depthTextureUsage());
++        if (!state->motion || !state->depth) return false;
++        state->device = NS::RetainPtr(device->mtl);
++        state->inputWidth = iw; state->inputHeight = ih; state->outputWidth = ow; state->outputHeight = oh; state->format = format;
++        cached = state;
++        char message[180]{};
++        snprintf(message,sizeof(message),"MetalFX temporal prepared: %ux%u -> %ux%u; real depth + decoded game velocity",iw,ih,ow,oh);
++        reportMetalDiagnostic(message,false);
++        return true;
++    }
++
++    void beginMetalTemporalFrame() {
++        std::lock_guard lock(metalTemporalMutex());
++        if (auto &state = metalTemporalState()) state->inputsReady = false;
++    }
++
++    bool captureMetalTemporalInputs(RenderCommandList *renderList, const RenderTexture *velocity, const RenderTexture *depth) {
++        MetalAutoreleasePool releasePool;
++        std::shared_ptr<MetalTemporalState> state;
++        { std::lock_guard lock(metalTemporalMutex()); state = metalTemporalState(); }
++        if (!state || !velocity || !depth) return false;
++        auto input = NS::RetainPtr(static_cast<const ExtendedRenderTexture *>(velocity)->getTexture());
++        auto z = NS::RetainPtr(static_cast<const ExtendedRenderTexture *>(depth)->getTexture());
++        static int inputReports = 0;
++        if (inputReports++ < 5) {
++            char message[240]{};
++            snprintf(message,sizeof(message),"Temporal capture: motion=%zux%zu type=%lu pf=%lu; depth=%zux%zu type=%lu pf=%lu; expected=%ux%u",
++                input->width(),input->height(),(unsigned long)input->textureType(),(unsigned long)input->pixelFormat(),
++                z->width(),z->height(),(unsigned long)z->textureType(),(unsigned long)z->pixelFormat(),state->inputWidth,state->inputHeight);
++            reportMetalDiagnostic(message,false);
++        }
++        if (z->textureType() != MTL::TextureType2D || input->textureType() != MTL::TextureType2D ||
++            z->width() != state->inputWidth || z->height() != state->inputHeight) return false;
++        auto *list = static_cast<MetalCommandList *>(renderList);
++        list->endOtherEncoders(EncoderType::None);
++        auto encoder = list->mtl->computeCommandEncoder();
++        encoder->setLabel(NS::String::string("Unleashed Temporal input conversion",NS::UTF8StringEncoding));
++        encoder->setComputePipelineState(z->pixelFormat() == MTL::PixelFormatDepth32Float ? state->decodeDepth.get() : state->decodeColorDepth.get());
++        encoder->setTexture(input.get(),0); encoder->setTexture(z.get(),1);
++        encoder->setTexture(state->motion.get(),2); encoder->setTexture(state->depth.get(),3);
++        encoder->dispatchThreads(MTL::Size(state->inputWidth,state->inputHeight,1),MTL::Size(8,8,1));
++        encoder->endEncoding();
++        list->mtl->addCompletedHandler([state,input,z](MTL::CommandBuffer *) {});
++        state->inputsReady = true;
++        return true;
++    }
++
++    bool encodeMetalTemporalUpscaling(RenderCommandList *renderList, const RenderTexture *source, const RenderTexture *destination,
++        float jitterX, float jitterY, bool resetHistory) {
++        MetalAutoreleasePool releasePool;
++        std::shared_ptr<MetalTemporalState> state;
++        { std::lock_guard lock(metalTemporalMutex()); state = metalTemporalState(); }
++        if (!state || !state->inputsReady) return false;
++        auto *list = static_cast<MetalCommandList *>(renderList);
++        auto input = NS::RetainPtr(static_cast<const ExtendedRenderTexture *>(source)->getTexture());
++        auto output = NS::RetainPtr(static_cast<const ExtendedRenderTexture *>(destination)->getTexture());
++        if (input->width() != state->inputWidth || input->height() != state->inputHeight ||
++            output->width() != state->outputWidth || output->height() != state->outputHeight) return false;
++        list->endOtherEncoders(EncoderType::None);
++        state->scaler->setColorTexture(input.get()); state->scaler->setOutputTexture(output.get());
++        state->scaler->setDepthTexture(state->depth.get()); state->scaler->setMotionTexture(state->motion.get());
++        state->scaler->setInputContentWidth(state->inputWidth); state->scaler->setInputContentHeight(state->inputHeight);
++        state->scaler->setMotionVectorScaleX(-float(state->inputWidth));
++        state->scaler->setMotionVectorScaleY(-float(state->inputHeight));
++        state->scaler->setDepthReversed(true); state->scaler->setPreExposure(1.0f);
++        state->scaler->setJitterOffsetX(jitterX); state->scaler->setJitterOffsetY(jitterY);
++        state->scaler->setReset(resetHistory);
++        state->scaler->encodeToCommandBuffer(list->mtl);
++        list->mtl->addCompletedHandler([state,input,output](MTL::CommandBuffer *) {});
++        return true;
++    }
++
++#endif
+ 
+     static void reportMetalGPUInterval(MTL::CommandBuffer *buffer, MetalEncodingDiagnostics encoding) {
+         // Ignore upload command lists; aggregate only lists with rendering.
+@@ -2919,8 +3177,10 @@
+         checkActiveRenderEncoder();
+         checkForUpdatesInGraphicsState();
+ 
+-        if (passDiagnostics && !passDiagnostics->passes.empty() && passDiagnostics->passes.size() < MetalPassDiagnostics::MaxPasses)
+-            ++passDiagnostics->passes.back().draws;
++        if (passDiagnostics && !passDiagnostics->passes.empty() && passDiagnostics->passes.size() < MetalPassDiagnostics::MaxPasses) {
++            auto &pass = passDiagnostics->passes.back();
++            if (pass.draws++ == 0) pass.label = passDiagnostics->pendingLabel;
++        }
+         activeRenderEncoder->drawPrimitives(activeRenderState->primitiveType, startVertexLocation, vertexCountPerInstance, instanceCount, startInstanceLocation);
+     }
+ 
+@@ -2932,8 +3192,10 @@
+         checkActiveRenderEncoder();
+         checkForUpdatesInGraphicsState();
+ 
+-        if (passDiagnostics && !passDiagnostics->passes.empty() && passDiagnostics->passes.size() < MetalPassDiagnostics::MaxPasses)
+-            ++passDiagnostics->passes.back().draws;
++        if (passDiagnostics && !passDiagnostics->passes.empty() && passDiagnostics->passes.size() < MetalPassDiagnostics::MaxPasses) {
++            auto &pass = passDiagnostics->passes.back();
++            if (pass.draws++ == 0) pass.label = passDiagnostics->pendingLabel;
++        }
+         activeRenderEncoder->drawIndexedPrimitives(currentPrimitiveType, indexCountPerInstance, currentIndexType, indexBuffer, indexBufferOffset + (startIndexLocation * indexTypeSize), instanceCount, baseVertexLocation, startInstanceLocation);
+     }
+ 
+diff --git a/plume_metal_upscaling.h b/plume_metal_upscaling.h
+new file mode 100644
+--- /dev/null
++++ b/plume_metal_upscaling.h
+@@ -0,0 +1,17 @@
++#pragma once
++#include "plume_render_interface.h"
++namespace plume {
++// iOS-only experimental upscaling; encoding calls run on the render thread.
++bool prepareMetalSpatialUpscaling(RenderDevice *device, uint32_t inputWidth, uint32_t inputHeight,
++    uint32_t outputWidth, uint32_t outputHeight, RenderFormat format);
++void encodeMetalSpatialUpscaling(RenderCommandList *list, const RenderTexture *source, const RenderTexture *destination);
++// Pass profiling (UNLEASHED_IOS_GPU_PASS_DIAGNOSTICS=1): names the next draw's
++// pass in sampled frames; ignored in ordinary frames.
++void setMetalPassDiagnosticLabel(RenderCommandList *list, const char *label);
++bool prepareMetalTemporalUpscaling(RenderDevice *device, uint32_t inputWidth, uint32_t inputHeight,
++    uint32_t outputWidth, uint32_t outputHeight, RenderFormat format);
++void beginMetalTemporalFrame();
++bool captureMetalTemporalInputs(RenderCommandList *list, const RenderTexture *velocity, const RenderTexture *depth);
++bool encodeMetalTemporalUpscaling(RenderCommandList *list, const RenderTexture *source, const RenderTexture *destination,
++    float jitterX, float jitterY, bool resetHistory);
++}
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -109,3 +109,7 @@
+ if(PLUME_BUILD_EXAMPLES)
+     add_subdirectory(examples)
+ endif() 
++
++if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
++    target_link_libraries(plume PUBLIC "-framework MetalFX")
++endif()

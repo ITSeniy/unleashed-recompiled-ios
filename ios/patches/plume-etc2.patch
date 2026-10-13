@@ -1,0 +1,115 @@
+diff --git a/plume_render_interface_types.h b/plume_render_interface_types.h
+--- a/plume_render_interface_types.h
++++ b/plume_render_interface_types.h
+@@ -164,6 +164,12 @@
+         ASTC_4x4_UNORM_SRGB,
+         ASTC_6x6_UNORM,
+         ASTC_6x6_UNORM_SRGB,
++        ETC2_RGB8_UNORM,
++        ETC2_RGB8_UNORM_SRGB,
++        ETC2_RGBA8_UNORM,
++        ETC2_RGBA8_UNORM_SRGB,
++        EAC_R11_UNORM,
++        EAC_R11G11_UNORM,
+         MAX
+     };
+ 
+@@ -581,6 +587,9 @@
+         case RenderFormat::BC4_UNORM:
+         case RenderFormat::BC4_SNORM:
+         case RenderFormat::BC4_TYPELESS:
++        case RenderFormat::ETC2_RGB8_UNORM:
++        case RenderFormat::ETC2_RGB8_UNORM_SRGB:
++        case RenderFormat::EAC_R11_UNORM:
+             return 8;
+         case RenderFormat::BC2_UNORM:
+         case RenderFormat::BC2_UNORM_SRGB:
+@@ -594,6 +603,9 @@
+         case RenderFormat::BC6H_SF16:
+         case RenderFormat::BC7_UNORM:
+         case RenderFormat::BC7_UNORM_SRGB:
++        case RenderFormat::ETC2_RGBA8_UNORM:
++        case RenderFormat::ETC2_RGBA8_UNORM_SRGB:
++        case RenderFormat::EAC_R11G11_UNORM:
+         case RenderFormat::ASTC_4x4_UNORM:
+         case RenderFormat::ASTC_4x4_UNORM_SRGB:
+         case RenderFormat::ASTC_6x6_UNORM:
+@@ -682,6 +694,12 @@
+         case RenderFormat::BC7_TYPELESS:
+         case RenderFormat::BC7_UNORM:
+         case RenderFormat::BC7_UNORM_SRGB:
++        case RenderFormat::ETC2_RGB8_UNORM:
++        case RenderFormat::ETC2_RGB8_UNORM_SRGB:
++        case RenderFormat::ETC2_RGBA8_UNORM:
++        case RenderFormat::ETC2_RGBA8_UNORM_SRGB:
++        case RenderFormat::EAC_R11_UNORM:
++        case RenderFormat::EAC_R11G11_UNORM:
+         case RenderFormat::ASTC_4x4_UNORM:
+         case RenderFormat::ASTC_4x4_UNORM_SRGB:
+             return 4;
+@@ -1771,6 +1789,8 @@
+         // Bindless resources.
+         bool descriptorIndexing = false;
+         bool scalarBlockLayout = false;
++        bool textureCompressionBC = false;
++        bool textureCompressionETC2 = false;
+ 
+         // Buffers.
+         bool bufferDeviceAddress = false;
+diff --git a/plume_metal.cpp b/plume_metal.cpp
+--- a/plume_metal.cpp
++++ b/plume_metal.cpp
+@@ -252,6 +252,18 @@
+                 case MTL::PixelFormatR8Sint:
+                     return RenderFormat::R8_SINT;
+                 // Block compressed formats
++                case MTL::PixelFormatETC2_RGB8:
++                    return RenderFormat::ETC2_RGB8_UNORM;
++                case MTL::PixelFormatETC2_RGB8_sRGB:
++                    return RenderFormat::ETC2_RGB8_UNORM_SRGB;
++                case MTL::PixelFormatEAC_RGBA8:
++                    return RenderFormat::ETC2_RGBA8_UNORM;
++                case MTL::PixelFormatEAC_RGBA8_sRGB:
++                    return RenderFormat::ETC2_RGBA8_UNORM_SRGB;
++                case MTL::PixelFormatEAC_R11Unorm:
++                    return RenderFormat::EAC_R11_UNORM;
++                case MTL::PixelFormatEAC_RG11Unorm:
++                    return RenderFormat::EAC_R11G11_UNORM;
+                 case MTL::PixelFormatBC1_RGBA:
+                     return RenderFormat::BC1_UNORM;
+                 case MTL::PixelFormatBC1_RGBA_sRGB:
+@@ -338,6 +350,18 @@
+                 return MTL::PixelFormatRGBA8Sint;
+             case RenderFormat::B8G8R8A8_UNORM:
+                 return MTL::PixelFormatBGRA8Unorm;
++           case RenderFormat::ETC2_RGB8_UNORM:
++               return MTL::PixelFormatETC2_RGB8;
++           case RenderFormat::ETC2_RGB8_UNORM_SRGB:
++               return MTL::PixelFormatETC2_RGB8_sRGB;
++           case RenderFormat::ETC2_RGBA8_UNORM:
++               return MTL::PixelFormatEAC_RGBA8;
++           case RenderFormat::ETC2_RGBA8_UNORM_SRGB:
++               return MTL::PixelFormatEAC_RGBA8_sRGB;
++           case RenderFormat::EAC_R11_UNORM:
++               return MTL::PixelFormatEAC_R11Unorm;
++           case RenderFormat::EAC_R11G11_UNORM:
++               return MTL::PixelFormatEAC_RG11Unorm;
+             case RenderFormat::ASTC_4x4_UNORM:
+                 return MTL::PixelFormatASTC_4x4_LDR;
+             case RenderFormat::ASTC_4x4_UNORM_SRGB:
+@@ -3749,6 +3773,15 @@
+ 
+         nullBuffer = createBuffer(RenderBufferDesc::DefaultBuffer(16, RenderBufferFlag::VERTEX));
+ 
++#if PLUME_IOS
++        capabilities.textureCompressionBC = osVersion.majorVersion > 16 ||
++            (osVersion.majorVersion == 16 && osVersion.minorVersion >= 4)
++            ? mtl->supportsBCTextureCompression() : false;
++#else
++        capabilities.textureCompressionBC = mtl->supportsBCTextureCompression();
++#endif
++        capabilities.textureCompressionETC2 = mtl->supportsFamily(MTL::GPUFamilyApple3);
++
+         if (supportsResidencySets) {
+             MTL::ResidencySetDescriptor* residencySetDescriptor = MTL::ResidencySetDescriptor::alloc()->init();
+             gpuAddressableResidencySet = mtl->newResidencySet(residencySetDescriptor, nullptr);

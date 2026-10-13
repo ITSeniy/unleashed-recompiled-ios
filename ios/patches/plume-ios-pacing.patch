@@ -1,0 +1,237 @@
+diff --git a/plume_metal.cpp b/plume_metal.cpp
+--- a/plume_metal.cpp
++++ b/plume_metal.cpp
+@@ -15,6 +15,8 @@
+ #include <CoreFoundation/CoreFoundation.h>
+ 
+ #include <algorithm>
++#include <cstdlib>
++#include <limits>
+ #include <mutex>
+ #include <unordered_map>
+ 
+@@ -1021,6 +1023,12 @@
+ 
+     static std::atomic<MetalDiagnosticCallback> metalDiagnosticCallback{nullptr};
+ 
++    static std::atomic<double> metalPresentMinimumDuration{0.0};
++
++    void setMetalPresentMinimumDuration(double seconds) {
++        metalPresentMinimumDuration.store(std::max(0.0, seconds), std::memory_order_relaxed);
++    }
++
+     void setMetalDiagnosticCallback(MetalDiagnosticCallback callback) {
+         metalDiagnosticCallback.store(callback);
+     }
+@@ -1031,6 +1039,83 @@
+         } else {
+             fprintf(stderr, "%s\n", message);
+         }
++    }
++
++    // Diagnostics are opt-in and use actual display timestamps, not GPU completion.
++    static bool metalFrameDiagnosticsEnabled() {
++        static const bool enabled = [] {
++            const char *value = std::getenv("UNLEASHED_IOS_FRAME_DIAGNOSTICS");
++            return value != nullptr && value[0] == '1';
++        }();
++        return enabled;
++    }
++
++    struct MetalEncodingDiagnostics {
++        uint32_t draws = 0, renderPasses = 0, dispatches = 0;
++    };
++    static thread_local MetalEncodingDiagnostics metalEncodingDiagnostics;
++
++    static void reportMetalGPUInterval(MTL::CommandBuffer *buffer, MetalEncodingDiagnostics encoding) {
++        // Ignore upload command lists; aggregate only lists with rendering.
++        if (encoding.draws == 0) return;
++        const double milliseconds = 1000.0 * (buffer->GPUEndTime() - buffer->GPUStartTime());
++        if (milliseconds <= 0.0) return;
++        static std::mutex mutex;
++        static uint32_t count = 0;
++        static double sum = 0.0, maximum = 0.0;
++        static uint64_t draws = 0, passes = 0, dispatches = 0;
++        char message[256]{};
++        {
++            std::lock_guard lock(mutex);
++            ++count; sum += milliseconds; maximum = std::max(maximum, milliseconds);
++            draws += encoding.draws; passes += encoding.renderPasses; dispatches += encoding.dispatches;
++            if (count < 120) return;
++            snprintf(message, sizeof(message),
++                "Metal GPU timing: n=%u, mean=%.3f ms, max=%.3f ms, draws=%.1f, renderPasses=%.1f, dispatches=%.1f",
++                count, sum / count, maximum, double(draws) / count, double(passes) / count, double(dispatches) / count);
++            count = 0; sum = maximum = 0.0; draws = passes = dispatches = 0;
++        }
++        reportMetalDiagnostic(message, false);
++    }
++
++    static void reportMetalPresentedInterval(double timestamp, double targetSeconds) {
++        static std::mutex mutex;
++        static double previous = 0.0, sum = 0.0, minimum = 1e9, maximum = 0.0;
++        static uint32_t count = 0, shortCount = 0, longCount = 0, severeCount = 0;
++        char message[352]{};
++        const double requestedMinimum = targetSeconds;
++        {
++            std::lock_guard lock(mutex);
++            if (timestamp <= previous || timestamp == 0.0)
++                return;
++            const double interval = timestamp - previous;
++            previous = timestamp;
++            if (interval > 1.0) {
++                count = shortCount = longCount = severeCount = 0;
++                sum = maximum = 0.0; minimum = 1e9;
++                return;
++            }
++            // Diagnostics target the configured cap even in the baseline run.
++            const char *target = std::getenv("UNLEASHED_IOS_DIAGNOSTIC_FPS");
++            if (target != nullptr && std::atof(target) > 0.0)
++                targetSeconds = 1.0 / std::atof(target);
++            if (targetSeconds <= 0.0)
++                targetSeconds = 1.0 / 30.0;
++            ++count; sum += interval;
++            minimum = std::min(minimum, interval); maximum = std::max(maximum, interval);
++            shortCount += interval < targetSeconds * 0.8;
++            longCount += interval > targetSeconds * 1.25;
++            severeCount += interval > targetSeconds * 1.75;
++            if (count < 120)
++                return;
++            snprintf(message, sizeof(message),
++                "Metal display timing: n=%u, mean=%.3f ms, min=%.3f ms, max=%.3f ms, short=%u, long=%u, severe=%u, target=%.3f ms, presentMin=%.3f ms",
++                count, 1000.0 * sum / count, 1000.0 * minimum, 1000.0 * maximum,
++                shortCount, longCount, severeCount, 1000.0 * targetSeconds, 1000.0 * requestedMinimum);
++            count = shortCount = longCount = severeCount = 0;
++            sum = maximum = 0.0; minimum = 1e9;
++        }
++        reportMetalDiagnostic(message, false);
+     }
+ 
+     static void reportMetalCommandBufferError(MTL::CommandBuffer *buffer) {
+@@ -2106,6 +2191,11 @@
+ 
+         this->commandQueue = commandQueue;
+         this->maxFrameLatency = maxFrameLatency;
++#if TARGET_OS_IOS
++        // Honor the application's double/triple buffering choice. The pool
++        // also provides backpressure when presentation itself caps frame rate.
++        configureIOSMetalDrawableCount(layer, std::clamp(textureCount, 2u, 3u));
++#endif
+ 
+         // Metal supports a maximum of 3 drawables.
+         this->drawables.resize(MAX_DRAWABLES);
+@@ -2169,8 +2259,20 @@
+                 reportMetalDiagnostic(message, false);
+             });
+         }
+-        presentBuffer->addScheduledHandler([drawableMtl](MTL::CommandBuffer* cmdBuffer) {
+-            drawableMtl->present();
++        double minimumDuration = 0.0;
++#if TARGET_OS_IOS
++        minimumDuration = metalPresentMinimumDuration.load(std::memory_order_relaxed);
++#endif
++        if (metalFrameDiagnosticsEnabled()) {
++            drawableMtl->addPresentedHandler([minimumDuration](MTL::Drawable *displayed) {
++                reportMetalPresentedInterval(displayed->presentedTime(), minimumDuration);
++            });
++        }
++        presentBuffer->addScheduledHandler([drawableMtl, minimumDuration](MTL::CommandBuffer* cmdBuffer) {
++            if (minimumDuration > 0.0)
++                drawableMtl->presentAfterMinimumDuration(minimumDuration);
++            else
++                drawableMtl->present();
+         });
+ 
+         presentBuffer->addCompletedHandler([drawableMtl, presentId, state = presentState](MTL::CommandBuffer* cmdBuffer) {
+@@ -2474,6 +2576,7 @@
+ 
+         MetalAutoreleasePool releasePool;
+         startedEncoding = false;
++        if (metalFrameDiagnosticsEnabled()) metalEncodingDiagnostics = {};
+         mtl = queue->mtl->commandBufferWithUnretainedReferences();
+         mtl->retain();
+         mtl->setLabel(MTLSTR("RT64 Command List"));
+@@ -2508,6 +2611,10 @@
+     }
+ 
+     void MetalCommandList::commit() {
++        if (metalFrameDiagnosticsEnabled()) {
++            const auto encoding = metalEncodingDiagnostics;
++            mtl->addCompletedHandler([encoding](MTL::CommandBuffer *buffer) { reportMetalGPUInterval(buffer, encoding); });
++        }
+         mtl->addCompletedHandler([](MTL::CommandBuffer *buffer) { reportMetalCommandBufferError(buffer); });
+         commitMetalCommandBuffer(mtl);
+         mtl->release();
+@@ -2666,6 +2773,7 @@
+     void MetalCommandList::dispatch(const uint32_t threadGroupCountX, const uint32_t threadGroupCountY, const uint32_t threadGroupCountZ) {
+         assert(activeComputePipelineLayout != nullptr);
+ 
++        if (metalFrameDiagnosticsEnabled()) ++metalEncodingDiagnostics.dispatches;
+         MetalAutoreleasePool releasePool;
+         checkActiveComputeEncoder();
+ 
+@@ -2707,6 +2815,7 @@
+     void MetalCommandList::drawInstanced(const uint32_t vertexCountPerInstance, const uint32_t instanceCount, const uint32_t startVertexLocation, const uint32_t startInstanceLocation) {
+         assert(activeGraphicsPipelineLayout != nullptr);
+ 
++        if (metalFrameDiagnosticsEnabled()) ++metalEncodingDiagnostics.draws;
+         MetalAutoreleasePool releasePool;
+         checkActiveRenderEncoder();
+         checkForUpdatesInGraphicsState();
+@@ -2717,6 +2826,7 @@
+     void MetalCommandList::drawIndexedInstanced(const uint32_t indexCountPerInstance, const uint32_t instanceCount, const uint32_t startIndexLocation, const int32_t baseVertexLocation, const uint32_t startInstanceLocation) {
+         assert(activeGraphicsPipelineLayout != nullptr);
+ 
++        if (metalFrameDiagnosticsEnabled()) ++metalEncodingDiagnostics.draws;
+         MetalAutoreleasePool releasePool;
+         checkActiveRenderEncoder();
+         checkForUpdatesInGraphicsState();
+@@ -3586,6 +3696,7 @@
+                 renderDescriptor->setSamplePositions(targetFramebuffer->samplePositions, targetFramebuffer->sampleCount);
+             }
+ 
++            if (metalFrameDiagnosticsEnabled()) ++metalEncodingDiagnostics.renderPasses;
+             activeRenderEncoder = mtl->renderCommandEncoder(renderDescriptor);
+             activeRenderEncoder->setLabel(MTLSTR("Graphics Render Encoder"));
+ 
+diff --git a/plume_metal_diagnostics.h b/plume_metal_diagnostics.h
+--- a/plume_metal_diagnostics.h
++++ b/plume_metal_diagnostics.h
+@@ -6,3 +6,9 @@
+     // The callback can run on a Metal driver thread and must be thread-safe.
+     void setMetalDiagnosticCallback(MetalDiagnosticCallback callback);
+ }
++
++namespace plume {
++    // Zero selects immediate presentation. A positive value keeps each frame
++    // on the display for at least this duration (iOS only).
++    void setMetalPresentMinimumDuration(double seconds);
++}
+diff --git a/plume_apple.h b/plume_apple.h
+--- a/plume_apple.h
++++ b/plume_apple.h
+@@ -14,6 +14,7 @@
+ namespace plume {
+     RenderDeviceVendor getRenderDeviceVendor(uint64_t registryID);
+     void* ensureMetalLayerForIOSWindow(void* window);
++    void configureIOSMetalDrawableCount(void* layer, uint32_t count);
+ 
+     struct CocoaWindowAttributes {
+         int x, y;
+diff --git a/plume_apple.mm b/plume_apple.mm
+--- a/plume_apple.mm
++++ b/plume_apple.mm
+@@ -276,3 +276,14 @@
+ #endif
+     }
+ }
++
++namespace plume {
++    void configureIOSMetalDrawableCount(void* layer, uint32_t count) {
++#if TARGET_OS_IOS
++        CAMetalLayer* metalLayer = (__bridge CAMetalLayer*)layer;
++        metalLayer.maximumDrawableCount = count;
++#else
++        (void)layer; (void)count;
++#endif
++    }
++}
