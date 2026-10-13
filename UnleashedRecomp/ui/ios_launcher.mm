@@ -1,5 +1,7 @@
 #include <stdafx.h>
 #include "ios_launcher.h"
+#include "ios_mod_manager.h"
+#include "ios_mod_settings.h"
 #include <install/installer.h>
 #include <locale/locale.h>
 #include <os/logger.h>
@@ -93,6 +95,7 @@ typedef NS_ENUM(NSInteger, LauncherRowKind)
 @property (nonatomic, copy) void (^setFloatValue)(float value);
 @property (nonatomic, copy) NSString* (^formatFloat)(float value);
 @property (nonatomic, copy) void (^action)(UIView* source);
+@property (nonatomic) BOOL movable;
 @end
 
 @implementation LauncherRow
@@ -125,7 +128,13 @@ static LauncherRow* ToggleRow(ConfigDef<bool, isHidden>& def, NSString* title = 
     if (title == nil)
         row.detail = OneLine(def.GetDescription(Config::Language));
     row.isOn = ^BOOL { return config->Value; };
-    row.setOn = ^(BOOL on) { config->Value = on; };
+    row.setOn = ^(BOOL on)
+    {
+        config->Value = on;
+        // Hidden values are only saved once they appear in the config file.
+        if constexpr (isHidden)
+            config->IsLoadedFromConfig = true;
+    };
     return row;
 }
 
@@ -198,13 +207,15 @@ static InstallStatus InspectInstallation()
     return status;
 }
 
-@interface LauncherViewController : UIViewController <UITableViewDataSource, UITableViewDelegate>
+@interface LauncherViewController : UIViewController <UITableViewDataSource, UITableViewDelegate, UIDocumentPickerDelegate>
 @property (nonatomic, copy) void (^completion)(IOSLauncherAction action);
 @end
 
 @implementation LauncherViewController
 {
     InstallStatus _status;
+    std::vector<IOSMod> _mods;
+    BOOL _reordering;
     NSInteger _section;
     NSArray<NSString*>* _sectionTitles;
     NSArray<NSString*>* _sectionSymbols;
@@ -236,8 +247,8 @@ static InstallStatus InspectInstallation()
 {
     [super viewDidLoad];
     self.view.backgroundColor = UIColor.systemGroupedBackgroundColor;
-    _sectionTitles = @[ L("IOSLauncher_Section_Game"), L("IOSLauncher_Section_Graphics"), L("IOSLauncher_Section_Advanced") ];
-    _sectionSymbols = @[ @"gamecontroller", @"display", @"wrench.and.screwdriver" ];
+    _sectionTitles = @[ L("IOSLauncher_Section_Game"), L("IOSLauncher_Section_Graphics"), L("IOSLauncher_Section_Mods"), L("IOSLauncher_Section_Advanced") ];
+    _sectionSymbols = @[ @"gamecontroller", @"display", @"puzzlepiece.extension", @"wrench.and.screwdriver" ];
     _section = [NSUserDefaults.standardUserDefaults integerForKey:@"launcher.section"];
     if (_section < 0 || _section >= (NSInteger)_sectionTitles.count)
         _section = 0;
@@ -247,6 +258,8 @@ static InstallStatus InspectInstallation()
     _table = [[UITableView alloc] initWithFrame:CGRectZero style:UITableViewStyleInsetGrouped];
     _table.dataSource = self;
     _table.delegate = self;
+    // The Done row ends reordering, so rows stay tappable in edit mode.
+    _table.allowsSelectionDuringEditing = YES;
     _table.backgroundColor = UIColor.systemGroupedBackgroundColor;
     _table.translatesAutoresizingMaskIntoConstraints = NO;
 
@@ -332,9 +345,10 @@ static InstallStatus InspectInstallation()
     [_playButton addTarget:self action:@selector(play) forControlEvents:UIControlEventPrimaryActionTriggered];
     [_playButton.heightAnchor constraintEqualToConstant:52].active = YES;
 
+    UIButton* mods = [self quickButton:L("IOSLauncher_Section_Mods") symbol:@"puzzlepiece.extension" action:@selector(showMods)];
     UIButton* files = [self quickButton:L("IOSLauncher_Files") symbol:@"folder" action:@selector(openFiles:)];
     UIButton* log = [self quickButton:L("IOSLauncher_ShareLog") symbol:@"doc.text" action:@selector(shareLog:)];
-    UIStackView* quick = [[UIStackView alloc] initWithArrangedSubviews:@[ files, log ]];
+    UIStackView* quick = [[UIStackView alloc] initWithArrangedSubviews:@[ mods, files, log ]];
     quick.axis = UILayoutConstraintAxisHorizontal;
     quick.distribution = UIStackViewDistributionFillEqually;
     quick.spacing = 8;
@@ -411,9 +425,21 @@ static InstallStatus InspectInstallation()
     return rail;
 }
 
+- (void)showMods
+{
+    [self selectSection:2];
+}
+
 - (void)selectSectionButton:(UIButton*)sender
 {
-    _section = sender.tag;
+    [self selectSection:sender.tag];
+}
+
+- (void)selectSection:(NSInteger)section
+{
+    _section = section;
+    _reordering = NO;
+    [_table setEditing:NO animated:NO];
     [NSUserDefaults.standardUserDefaults setInteger:_section forKey:@"launcher.section"];
     [self rebuildGroups];
     [_table setContentOffset:CGPointMake(0, -_table.adjustedContentInset.top) animated:NO];
@@ -447,6 +473,7 @@ static InstallStatus InspectInstallation()
 - (void)refresh
 {
     _status = InspectInstallation();
+    _mods = ios_mods::Load();
     [self updateHome];
     [self rebuildGroups];
 }
@@ -462,6 +489,12 @@ static InstallStatus InspectInstallation()
     {
         NSString* dlc = [NSString stringWithFormat:@"DLC %d/%d", _status.dlcCount, int(DLC::Count)];
         [_chips addArrangedSubview:[self chip:dlc color:UIColor.systemBlueColor]];
+    }
+    const auto activeMods = std::count_if(_mods.begin(), _mods.end(), [](const IOSMod& mod) { return mod.enabled; });
+    if (activeMods > 0)
+    {
+        NSString* mods = [L("IOSLauncher_Chip_Mods") stringByReplacingOccurrencesOfString:@"{}" withString:@(activeMods).stringValue];
+        [_chips addArrangedSubview:[self chip:mods color:UIColor.systemPurpleColor]];
     }
 
     NSMutableArray<NSString*>* parts = [NSMutableArray array];
@@ -495,7 +528,8 @@ static InstallStatus InspectInstallation()
     switch (_section)
     {
     case 1: _groups = [self graphicsGroups]; break;
-    case 2: _groups = [self advancedGroups]; break;
+    case 2: _groups = [self modsGroups]; break;
+    case 3: _groups = [self advancedGroups]; break;
     default: _groups = [self gameGroups]; break;
     }
     [self updateRail];
@@ -616,6 +650,164 @@ static InstallStatus InspectInstallation()
     [overlays.rows addObject:ToggleRow(Config::MetalHUD, @"Metal HUD")];
 
     return @[ resolution, frameRate, quality, optimizations, overlays ];
+}
+
+- (NSArray<LauncherGroup*>*)modsGroups
+{
+    __weak LauncherViewController* weakSelf = self;
+    LauncherGroup* list = [LauncherGroup groupWithHeader:L("IOSLauncher_Group_Mods") footer:L("IOSLauncher_Mods_Footer")];
+    if (_mods.empty())
+        [list.rows addObject:[self infoRow:L("IOSLauncher_Mods_Empty") value:@"" symbol:@"puzzlepiece.extension" color:UIColor.tertiaryLabelColor]];
+
+    for (size_t i = 0; i < _mods.size(); i++)
+    {
+        const IOSMod& mod = _mods[i];
+        LauncherRow* row = [LauncherRow new];
+        row.kind = LauncherRowToggle;
+        row.title = NS(mod.title);
+        NSMutableArray<NSString*>* details = [NSMutableArray array];
+        if (!mod.author.empty())
+            [details addObject:NS(mod.author)];
+        if (!mod.version.empty())
+            [details addObject:NS(mod.version)];
+        if (!mod.schemaPath.empty())
+            [details addObject:L("IOSLauncher_Mods_HasSettings")];
+        row.detail = [details componentsJoinedByString:@" · "];
+        row.movable = YES;
+        row.isOn = ^BOOL { LauncherViewController* strongSelf = weakSelf; return strongSelf && i < strongSelf->_mods.size() && strongSelf->_mods[i].enabled; };
+        row.setOn = ^(BOOL on)
+        {
+            LauncherViewController* strongSelf = weakSelf;
+            if (strongSelf && i < strongSelf->_mods.size())
+            {
+                strongSelf->_mods[i].enabled = on;
+                [strongSelf saveMods];
+            }
+        };
+        if (!mod.schemaPath.empty())
+            row.action = ^(UIView*) { [weakSelf openModSettings:i]; };
+        [list.rows addObject:row];
+    }
+
+    LauncherGroup* actions = [LauncherGroup groupWithHeader:nil footer:nil];
+    [actions.rows addObject:[self actionRow:L("IOSLauncher_Mods_Install") symbol:@"square.and.arrow.down" action:^(UIView*) { [weakSelf pickMod]; }]];
+    if (_mods.size() > 1)
+    {
+        NSString* title = _reordering ? L("IOSLauncher_Mods_DoneReordering") : L("IOSLauncher_Mods_Reorder");
+        [actions.rows addObject:[self actionRow:title symbol:@"arrow.up.arrow.down" action:^(UIView*) { [weakSelf toggleReordering]; }]];
+    }
+    [actions.rows addObject:[self actionRow:L("IOSLauncher_Mods_OpenFolder") symbol:@"folder" action:^(UIView*) { [weakSelf openModsFolder]; }]];
+    [actions.rows addObject:[self actionRow:L("IOSLauncher_Recheck") symbol:@"arrow.clockwise" action:^(UIView*) { [weakSelf refresh]; }]];
+
+    // Built-in game patches, toggled like the desktop mod manager's codes.
+    static const struct { ConfigDef<bool, true>* def; const char* key; } codes[] =
+    {
+        { &Config::AllowCancellingUnleash, "IOSLauncher_Code_AllowCancellingUnleash" },
+        { &Config::DisableAutoSaveWarning, "IOSLauncher_Code_DisableAutoSaveWarning" },
+        { &Config::DisableBoostFilter, "IOSLauncher_Code_DisableBoostFilter" },
+        { &Config::DisableDLCIcon, "IOSLauncher_Code_DisableDLCIcon" },
+        { &Config::DisableDPadMovement, "IOSLauncher_Code_DisableDPadMovement" },
+        { &Config::FixEggmanlandUsingEventGalleryTransition, "IOSLauncher_Code_FixEggmanland" },
+        { &Config::FixUnleashOutOfControlDrain, "IOSLauncher_Code_FixUnleashDrain" },
+        { &Config::HomingAttackOnJump, "IOSLauncher_Code_HomingAttackOnJump" },
+        { &Config::SaveScoreAtCheckpoints, "IOSLauncher_Code_SaveScoreAtCheckpoints" },
+        { &Config::UseAlternateTitle, "IOSLauncher_Code_UseAlternateTitle" },
+        { &Config::UseArrowsForTimeOfDayTransition, "IOSLauncher_Code_TimeOfDayArrows" },
+    };
+    LauncherGroup* codeGroup = [LauncherGroup groupWithHeader:L("IOSLauncher_Group_Codes") footer:L("IOSLauncher_Codes_Footer")];
+    for (const auto& code : codes)
+        [codeGroup.rows addObject:ToggleRow(*code.def, L(code.key))];
+
+    return @[ list, actions, codeGroup ];
+}
+
+- (void)saveMods
+{
+    std::string error;
+    if (!ios_mods::Save(_mods, error))
+        [self showMessage:NS(error)];
+    [self updateHome];
+}
+
+- (void)showMessage:(NSString*)message
+{
+    UIAlertController* alert = [UIAlertController alertControllerWithTitle:nil message:message preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:L("IOSLauncher_OK") style:UIAlertActionStyleCancel handler:nil]];
+    [self presentViewController:alert animated:YES completion:nil];
+}
+
+- (void)toggleReordering
+{
+    _reordering = !_reordering;
+    [_table setEditing:_reordering animated:YES];
+    [self rebuildGroups];
+}
+
+- (void)openModSettings:(size_t)index
+{
+    if (index >= _mods.size())
+        return;
+    NSString* error = nil;
+    UIViewController* settings = CreateIOSModSettingsController(_mods[index], &error);
+    if (settings == nil)
+    {
+        [self showMessage:error];
+        return;
+    }
+    settings.overrideUserInterfaceStyle = UIUserInterfaceStyleDark;
+    [self presentViewController:settings animated:YES completion:nil];
+}
+
+- (void)openModsFolder
+{
+    std::error_code ec;
+    std::filesystem::create_directories(ios_mods::GetModsDirectory(), ec);
+    [self openFolder:ios_mods::GetModsDirectory()];
+}
+
+- (void)pickMod
+{
+    // Same picker API as the installer; a folder or a ZIP archive.
+    UIDocumentPickerViewController* picker = [[UIDocumentPickerViewController alloc]
+        initWithDocumentTypes:@[ @"public.folder", @"public.zip-archive" ] inMode:UIDocumentPickerModeOpen];
+    picker.delegate = self;
+    picker.allowsMultipleSelection = NO;
+    [self presentViewController:picker animated:YES completion:nil];
+}
+
+- (void)documentPicker:(UIDocumentPickerViewController*)controller didPickDocumentsAtURLs:(NSArray<NSURL*>*)urls
+{
+    NSURL* url = urls.firstObject;
+    if (url == nil)
+        return;
+
+    const BOOL scoped = [url startAccessingSecurityScopedResource];
+    UIAlertController* progress = [UIAlertController alertControllerWithTitle:L("IOSLauncher_Mods_Installing") message:nil preferredStyle:UIAlertControllerStyleAlert];
+    [self presentViewController:progress animated:YES completion:nil];
+
+    __weak LauncherViewController* weakSelf = self;
+    const std::filesystem::path source(std::u8string_view((const char8_t*)url.fileSystemRepresentation));
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^
+    {
+        std::string error;
+        const int installed = ios_mods::Install(source, error);
+        dispatch_async(dispatch_get_main_queue(), ^
+        {
+            if (scoped)
+                [url stopAccessingSecurityScopedResource];
+            [progress dismissViewControllerAnimated:YES completion:^
+            {
+                LauncherViewController* strongSelf = weakSelf;
+                if (strongSelf == nil)
+                    return;
+                [strongSelf refresh];
+                if (installed > 0)
+                    [strongSelf showMessage:[L("IOSLauncher_Mods_Installed") stringByReplacingOccurrencesOfString:@"{}" withString:@(installed).stringValue]];
+                else
+                    [strongSelf showMessage:NS(error)];
+            }];
+        });
+    });
 }
 
 - (NSArray<LauncherGroup*>*)advancedGroups
@@ -827,15 +1019,56 @@ static InstallStatus InspectInstallation()
         if (row.kind != LauncherRowAction)
             cell.selectionStyle = UITableViewCellSelectionStyleDefault;
     }
+    if (row.action)
+        cell.selectionStyle = UITableViewCellSelectionStyleDefault;
     cell.contentConfiguration = content;
     return cell;
+}
+
+- (BOOL)tableView:(UITableView*)tableView canMoveRowAtIndexPath:(NSIndexPath*)indexPath
+{
+    return _reordering && _groups[indexPath.section].rows[indexPath.row].movable;
+}
+
+- (UITableViewCellEditingStyle)tableView:(UITableView*)tableView editingStyleForRowAtIndexPath:(NSIndexPath*)indexPath
+{
+    return UITableViewCellEditingStyleNone;
+}
+
+- (BOOL)tableView:(UITableView*)tableView shouldIndentWhileEditingRowAtIndexPath:(NSIndexPath*)indexPath
+{
+    return NO;
+}
+
+- (NSIndexPath*)tableView:(UITableView*)tableView targetIndexPathForMoveFromRowAtIndexPath:(NSIndexPath*)source toProposedIndexPath:(NSIndexPath*)proposed
+{
+    // Mods only move within their own list.
+    if (proposed.section == source.section)
+        return proposed;
+    const NSInteger last = (NSInteger)_groups[source.section].rows.count - 1;
+    return [NSIndexPath indexPathForRow:proposed.section < source.section ? 0 : last inSection:source.section];
+}
+
+- (void)tableView:(UITableView*)tableView moveRowAtIndexPath:(NSIndexPath*)source toIndexPath:(NSIndexPath*)destination
+{
+    const size_t from = source.row, to = destination.row;
+    if (from >= _mods.size() || to >= _mods.size() || from == to)
+        return;
+    IOSMod mod = std::move(_mods[from]);
+    _mods.erase(_mods.begin() + from);
+    _mods.insert(_mods.begin() + to, std::move(mod));
+    [self saveMods];
+    // Row blocks capture mod indices; rebuild them once the move animation ends.
+    dispatch_async(dispatch_get_main_queue(), ^{ [self rebuildGroups]; });
 }
 
 - (void)tableView:(UITableView*)tableView didSelectRowAtIndexPath:(NSIndexPath*)indexPath
 {
     [tableView deselectRowAtIndexPath:indexPath animated:YES];
     LauncherRow* row = _groups[indexPath.section].rows[indexPath.row];
-    if (row.kind == LauncherRowAction && row.action)
+    if (_reordering && row.movable)
+        return;
+    if (row.action)
     {
         row.action([tableView cellForRowAtIndexPath:indexPath]);
     }
@@ -866,7 +1099,12 @@ static InstallStatus InspectInstallation()
 {
     std::error_code ec;
     std::filesystem::create_directories(GetGamePath(), ec);
-    NSString* path = [PathString(GetGamePath()) stringByAddingPercentEncodingWithAllowedCharacters:NSCharacterSet.URLPathAllowedCharacterSet];
+    [self openFolder:GetGamePath()];
+}
+
+- (void)openFolder:(const std::filesystem::path&)folder
+{
+    NSString* path = [PathString(folder) stringByAddingPercentEncodingWithAllowedCharacters:NSCharacterSet.URLPathAllowedCharacterSet];
     NSURL* url = [NSURL URLWithString:[@"shareddocuments://" stringByAppendingString:path]];
     [UIApplication.sharedApplication openURL:url options:@{} completionHandler:^(BOOL success)
     {

@@ -1108,6 +1108,180 @@ std::unordered_map<std::string_view, std::unordered_map<ELanguage, std::string>>
         {
             { ELanguage::English, "OK" }
         }
+    },
+    {
+        "IOSLauncher_Section_Mods",
+        {
+            { ELanguage::English, "Mods" }
+        }
+    },
+    {
+        "IOSLauncher_Chip_Mods",
+        {
+            { ELanguage::English, "Mods {}" }
+        }
+    },
+    {
+        "IOSLauncher_Group_Mods",
+        {
+            { ELanguage::English, "Installed mods" }
+        }
+    },
+    {
+        "IOSLauncher_Mods_Footer",
+        {
+            { ELanguage::English, "Mods higher in the list take priority. Changes apply the next time the game starts." }
+        }
+    },
+    {
+        "IOSLauncher_Mods_Empty",
+        {
+            { ELanguage::English, "No mods installed" }
+        }
+    },
+    {
+        "IOSLauncher_Mods_HasSettings",
+        {
+            { ELanguage::English, "Tap for settings" }
+        }
+    },
+    {
+        "IOSLauncher_Mods_Install",
+        {
+            { ELanguage::English, "Install mod" }
+        }
+    },
+    {
+        "IOSLauncher_Mods_Reorder",
+        {
+            { ELanguage::English, "Change order" }
+        }
+    },
+    {
+        "IOSLauncher_Mods_DoneReordering",
+        {
+            { ELanguage::English, "Done" }
+        }
+    },
+    {
+        "IOSLauncher_Mods_OpenFolder",
+        {
+            { ELanguage::English, "Open mods folder" }
+        }
+    },
+    {
+        "IOSLauncher_Mods_Installing",
+        {
+            { ELanguage::English, "Installing mod…" }
+        }
+    },
+    {
+        "IOSLauncher_Mods_Installed",
+        {
+            { ELanguage::English, "Mods installed: {}. Turn them on in the list." }
+        }
+    },
+    {
+        "IOSLauncher_Group_Codes",
+        {
+            { ELanguage::English, "Codes" }
+        }
+    },
+    {
+        "IOSLauncher_Codes_Footer",
+        {
+            { ELanguage::English, "Built-in game patches, the same as the codes in desktop mod managers." }
+        }
+    },
+    {
+        "IOSLauncher_Code_AllowCancellingUnleash",
+        {
+            { ELanguage::English, "Allow cancelling Unleash" }
+        }
+    },
+    {
+        "IOSLauncher_Code_DisableAutoSaveWarning",
+        {
+            { ELanguage::English, "Disable auto-save warning" }
+        }
+    },
+    {
+        "IOSLauncher_Code_DisableBoostFilter",
+        {
+            { ELanguage::English, "Disable boost filter" }
+        }
+    },
+    {
+        "IOSLauncher_Code_DisableDLCIcon",
+        {
+            { ELanguage::English, "Disable DLC icon" }
+        }
+    },
+    {
+        "IOSLauncher_Code_DisableDPadMovement",
+        {
+            { ELanguage::English, "Disable D-pad movement" }
+        }
+    },
+    {
+        "IOSLauncher_Code_FixEggmanland",
+        {
+            { ELanguage::English, "Fix Eggmanland event gallery transition" }
+        }
+    },
+    {
+        "IOSLauncher_Code_FixUnleashDrain",
+        {
+            { ELanguage::English, "Fix Unleash out-of-control drain" }
+        }
+    },
+    {
+        "IOSLauncher_Code_HomingAttackOnJump",
+        {
+            { ELanguage::English, "Homing attack on jump" }
+        }
+    },
+    {
+        "IOSLauncher_Code_SaveScoreAtCheckpoints",
+        {
+            { ELanguage::English, "Save score at checkpoints" }
+        }
+    },
+    {
+        "IOSLauncher_Code_UseAlternateTitle",
+        {
+            { ELanguage::English, "Use alternate title" }
+        }
+    },
+    {
+        "IOSLauncher_Code_TimeOfDayArrows",
+        {
+            { ELanguage::English, "Use arrows for time-of-day transition" }
+        }
+    },
+    {
+        "IOSLauncher_ModSettings_Invalid",
+        {
+            { ELanguage::English, "{} has an invalid value." }
+        }
+    },
+    {
+        "IOSLauncher_ModSettings_SaveFailed",
+        {
+            { ELanguage::English, "The settings couldn't be saved." }
+        }
+    },
+    {
+        "IOSLauncher_ModSettings_Unreadable",
+        {
+            { ELanguage::English, "This mod's settings file can't be read." }
+        }
+    },
+    {
+        "IOSLauncher_ModSettings_Empty",
+        {
+            { ELanguage::English, "This mod has no settings." }
+        }
     }
 };
 
