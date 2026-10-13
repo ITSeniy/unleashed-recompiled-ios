@@ -1427,3 +1427,40 @@ only), 0.66× Spatial / 60 FPS / VSync off, cooler, windmill, thermal Nominal: t
 user confirmed the new options were present and On; 60–480 s held **60.08–60.09
 FPS with zero long intervals**, GPU 13.9–14.6 ms with no upward drift, 14 swaps and
 1 skip per frame. Log: `out/ios/iphone15-spatial066-ab.log`.
+
+## One codebase with Android (2026-10-13)
+
+iOS no longer builds from the pinned iOS fork archive plus `game-ios-etc2.patch`.
+The fork was merged into this repository as a three-way merge (base hedge-dev
+`cf829a9e`, ours the Android tree, theirs the fork with our iOS patches applied),
+and iOS now builds from the repository root. Android features reach iOS without
+porting, and the reverse.
+
+What stays separate is the dependency set. Android and desktop keep the
+vendored plume, SDL and XenosRecomp; iOS downloads its pins (`ios/prepare.py`).
+The newer XenosRecomp names entry points `shaderMain` and adds AIR fields and a
+filename to `ShaderCacheEntry`, so game code checks `UNLEASHED_RECOMP_XENOS_METAL`
+for the guest entry point and cache layout. The built-in HLSL shaders use the
+fork's sources (`gpu/shader/hlsl`, entry `shaderMain`) on every platform; Android
+regenerates their SPIR-V headers at build time. The iOS game shader cache goes to
+`out/ios/generated` so it never overwrites the tracked Android cache. iOS uses its
+native touch controls; Android's ImGui overlay is stubbed out there.
+
+Issues found while building both:
+
+- Both CMake variants defined `SDL_MAIN_HANDLED`, one for everything but Android
+  and one for everything but iOS. Together they covered both, so neither
+  platform's SDL main glue ran: iOS showed a black screen and exited after
+  `SDL_Init` failed, Android could not find `SDL_main` in `libmain.so`.
+- The Android plume reports descriptor-count limits and command counters that the
+  iOS plume pin lacks; iOS skips the limits and defines zero counters. The iOS
+  plume needs `DEVICE_ADDRESSABLE` on upload buffers.
+- bcdec was included with its implementation twice.
+
+Verified on 2026-10-13: the iOS build launches and plays on the iPhone 15 as
+before, and the Android build (NDK r29, arm64-v8a, debug, installed beside the
+0.6.1 release as `com.sega.sonicunr.unified`) runs like 0.6.1 on a CPH2799.
+
+Android 16 does not let an app read files that `adb push` (the `shell` user)
+writes into its `Android/data` directory. For a debuggable test build, copy the
+game files into internal storage with `run-as` instead.

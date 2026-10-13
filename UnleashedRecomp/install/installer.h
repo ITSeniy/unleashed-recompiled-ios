@@ -34,16 +34,28 @@ struct Journal
         DLCParsingFailed,
         PatchProcessFailed,
         PatchReplacementFailed,
-        UnknownDLCType
+        UnknownDLCType,
+        MemoryAllocationFailed,
+        UnexpectedError
+    };
+
+    struct FileWrite
+    {
+        std::filesystem::path target;
+        std::filesystem::path temporary;
+        std::filesystem::path backup;
+        bool backedUp = false;
+        bool installed = false;
     };
 
     uint64_t progressCounter = 0;
     uint64_t progressTotal = 0;
-    std::list<std::filesystem::path> createdFiles;
+    std::list<FileWrite> fileWrites;
     std::set<std::filesystem::path> createdDirectories;
     Result lastResult = Result::Success;
     XexPatcher::Result lastPatcherResult = XexPatcher::Result::Success;
     std::string lastErrorMessage;
+    const char* activeFile = "";
 };
 
 using FilePair = std::pair<const char *, uint32_t>;
@@ -78,7 +90,7 @@ struct Installer
     static bool checkInstallIntegrity(const std::filesystem::path &baseDirectory, Journal &journal, const std::function<bool()> &progressCallback);
     static bool computeTotalSize(std::span<const FilePair> filePairs, const uint64_t *fileHashes, VirtualFileSystem &sourceVfs, Journal &journal, uint64_t &totalSize);
     static bool checkFiles(std::span<const FilePair> filePairs, const uint64_t *fileHashes, const std::filesystem::path &targetDirectory, Journal &journal, const std::function<bool()> &progressCallback, bool checkSizeOnly);
-    static bool copyFiles(std::span<const FilePair> filePairs, const uint64_t *fileHashes, VirtualFileSystem &sourceVfs, const std::filesystem::path &targetDirectory, const std::string &validationFile, bool skipHashChecks, Journal &journal, const std::function<bool()> &progressCallback);
+    static bool copyFiles(std::span<const FilePair> filePairs, const uint64_t *fileHashes, VirtualFileSystem &sourceVfs, const std::filesystem::path &targetDirectory, const std::filesystem::path &cacheRoot, const std::string &validationFile, bool skipHashChecks, Journal &journal, const std::function<bool()> &progressCallback);
     static bool parseContent(const std::filesystem::path &sourcePath, std::unique_ptr<VirtualFileSystem> &targetVfs, Journal &journal);
     static bool parseSources(const Input &input, Journal &journal, Sources &sources);
     static bool install(const Sources &sources, const std::filesystem::path &targetDirectory, bool skipHashChecks, Journal &journal, std::chrono::seconds endWaitTime, const std::function<bool()> &progressCallback);

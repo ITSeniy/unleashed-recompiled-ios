@@ -10,6 +10,7 @@
 #include <memory>
 #include "xam.h"
 #include "xdm.h"
+#include "semaphore.h"
 #include <user/config.h>
 #include <os/logger.h>
 
@@ -59,7 +60,8 @@ struct Event final : KernelObject, HostObject<XKEVENT>
                 while (true)
                 {
                     bool expected = true;
-                    if (signaled.compare_exchange_weak(expected, false))
+                    // A spurious failure must not put us to sleep on a signaled event.
+                    if (signaled.compare_exchange_strong(expected, false))
                         break;
 
                     signaled.wait(expected);
@@ -95,71 +97,6 @@ struct Event final : KernelObject, HostObject<XKEVENT>
 
 static std::atomic<uint32_t> g_keSetEventGeneration;
 
-struct Semaphore final : KernelObject, HostObject<XKSEMAPHORE>
-{
-    std::atomic<uint32_t> count;
-    uint32_t maximumCount;
-
-    Semaphore(XKSEMAPHORE* semaphore)
-        : count(semaphore->Header.SignalState), maximumCount(semaphore->Limit)
-    {
-    }
-
-    Semaphore(uint32_t count, uint32_t maximumCount)
-        : count(count), maximumCount(maximumCount)
-    {
-    }
-
-    uint32_t Wait(uint32_t timeout) override
-    {
-        if (timeout == 0)
-        {
-            uint32_t currentCount = count.load();
-            if (currentCount != 0)
-            {
-                if (count.compare_exchange_weak(currentCount, currentCount - 1))
-                    return STATUS_SUCCESS;
-            }
-
-            return STATUS_TIMEOUT;
-        }
-        else if (timeout == INFINITE)
-        {
-            uint32_t currentCount;
-            while (true)
-            {
-                currentCount = count.load();
-                if (currentCount != 0)
-                {
-                    if (count.compare_exchange_weak(currentCount, currentCount - 1))
-                        return STATUS_SUCCESS;
-                }
-                else
-                {
-                    count.wait(0);
-                }
-            }
-
-            return STATUS_SUCCESS;
-        }
-        else
-        {
-            assert(false && "Unhandled timeout value.");
-            return STATUS_TIMEOUT;
-        }
-    }
-
-    void Release(uint32_t releaseCount, uint32_t* previousCount)
-    {
-        if (previousCount != nullptr)
-            *previousCount = count;
-
-        assert(count + releaseCount <= maximumCount);
-
-        count += releaseCount;
-        count.notify_all();
-    }
-};
 
 inline void CloseKernelObject(XDISPATCHER_HEADER& header)
 {
@@ -699,7 +636,9 @@ void RtlEnterCriticalSection(XRTL_CRITICAL_SECTION* cs)
     {
         uint32_t previousOwner = 0;
 
-        if (owningThread.compare_exchange_weak(previousOwner, thisThread) || previousOwner == thisThread)
+        // Only wait after observing a real owner. A weak CAS can fail with
+        // previousOwner == 0 on ARM, leaving nobody to release/notify the lock.
+        if (owningThread.compare_exchange_strong(previousOwner, thisThread) || previousOwner == thisThread)
         {
             cs->RecursionCount++;
             return;
@@ -1207,7 +1146,8 @@ bool RtlTryEnterCriticalSection(XRTL_CRITICAL_SECTION* cs)
 
     uint32_t previousOwner = 0;
 
-    if (owningThread.compare_exchange_weak(previousOwner, thisThread) || previousOwner == thisThread)
+    // Do not report contention when a free lock's exclusive store fails spuriously.
+    if (owningThread.compare_exchange_strong(previousOwner, thisThread) || previousOwner == thisThread)
     {
         cs->RecursionCount++;
         return true;
@@ -1419,9 +1359,19 @@ uint32_t ExCreateThread(be<uint32_t>* handle, uint32_t stackSize, be<uint32_t>* 
     LOGF_UTILITY("0x{:X}, 0x{:X}, 0x{:X}, 0x{:X}, 0x{:X}, 0x{:X}, 0x{:X}",
         (intptr_t)handle, stackSize, (intptr_t)threadId, xApiThreadStartup, startAddress, startContext, creationFlags);
 
-    uint32_t hostThreadId;
+    if (handle == nullptr)
+        return 0xC000000D; // STATUS_INVALID_PARAMETER
 
-    *handle = GetKernelHandle(GuestThread::Start({ startAddress, startContext, creationFlags }, &hostThreadId));
+    *handle = 0;
+    if (threadId != nullptr)
+        *threadId = 0;
+
+    uint32_t hostThreadId;
+    auto* thread = GuestThread::Start({ startAddress, startContext, creationFlags, stackSize }, &hostThreadId);
+    if (thread == nullptr)
+        return 0xC000009A; // STATUS_INSUFFICIENT_RESOURCES
+
+    *handle = GetKernelHandle(thread);
 
     if (threadId != nullptr)
         *threadId = hostThreadId;

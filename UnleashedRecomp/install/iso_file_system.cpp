@@ -11,34 +11,103 @@
 
 #include "iso_file_system.h"
 
+#include <cstring>
+#include <array>
+#include <fstream>
 #include <stack>
+#include <limits>
+#include <unordered_set>
+
+namespace
+{
+    static bool readFileRange(const std::filesystem::path& filePath, size_t offset, void* outBytes, size_t byteCount)
+    {
+        if (offset > static_cast<size_t>(std::numeric_limits<std::streamoff>::max())
+            || byteCount > static_cast<size_t>(std::numeric_limits<std::streamsize>::max()))
+            return false;
+
+        std::ifstream input(filePath, std::ios::binary);
+        if (!input.is_open())
+        {
+            return false;
+        }
+
+        input.seekg(static_cast<std::streamoff>(offset), std::ios::beg);
+        if (!input.good())
+        {
+            return false;
+        }
+
+        input.read(static_cast<char*>(outBytes), static_cast<std::streamsize>(byteCount));
+        return !input.bad() && static_cast<size_t>(input.gcount()) == byteCount;
+    }
+}
 
 ISOFileSystem::ISOFileSystem(const std::filesystem::path &isoPath)
 {
+    sourcePath = isoPath;
+    std::error_code ec;
+    sourceSize = static_cast<size_t>(std::filesystem::file_size(sourcePath, ec));
+    if (ec || sourceSize == 0)
+    {
+        return;
+    }
+
+#if !defined(UNLEASHED_RECOMP_IOS)
     mappedFile.open(isoPath);
-    if (!mappedFile.isOpen())
+#endif
+    const bool usingMappedFile = mappedFile.isOpen();
+    if (usingMappedFile)
+    {
+        sourceSize = mappedFile.size();
+    }
+
+    if (sourceSize == 0)
     {
         return;
     }
 
     name = (const char *)(isoPath.filename().u8string().data());
 
+    const uint8_t* mappedFileData = usingMappedFile ? mappedFile.data() : nullptr;
+    auto readBytes = [&](size_t offset, void* outBytes, size_t byteCount) -> bool
+    {
+        if (offset > sourceSize || byteCount > sourceSize - offset)
+        {
+            return false;
+        }
+
+        if (usingMappedFile)
+        {
+            std::memcpy(outBytes, &mappedFileData[offset], byteCount);
+            return true;
+        }
+
+        return readFileRange(sourcePath, offset, outBytes, byteCount);
+    };
+
     // Find root sector.
-    const uint8_t *mappedFileData = mappedFile.data();
     uint32_t gameOffset = 0;
     const size_t XeSectorSize = 2048;
     static const size_t PossibleOffsets[] = { 0x00000000, 0x0000FB20, 0x00020600, 0x02080000, 0x0FD90000, };
     bool magicFound = false;
     const char RefMagic[] = "MICROSOFT*XBOX*MEDIA";
+    char magicBuffer[sizeof(RefMagic)]{};
     for (size_t i = 0; i < std::size(PossibleOffsets); i++)
     {
         size_t fileOffset = PossibleOffsets[i] + (32 * XeSectorSize);
-        if ((fileOffset + strlen(RefMagic)) > mappedFile.size())
+        constexpr size_t magicSize = sizeof(RefMagic) - 1;
+        if ((fileOffset + magicSize) > sourceSize)
         {
             continue;
         }
 
-        if (std::memcmp(&mappedFileData[fileOffset], RefMagic, strlen(RefMagic)) == 0)
+        if (!readBytes(fileOffset, magicBuffer, magicSize))
+        {
+            continue;
+        }
+
+        if (std::memcmp(magicBuffer, RefMagic, magicSize) == 0)
         {
             gameOffset = PossibleOffsets[i];
             magicFound = true;
@@ -46,21 +115,26 @@ ISOFileSystem::ISOFileSystem(const std::filesystem::path &isoPath)
     }
 
     size_t rootInfoOffset = gameOffset + (32 * XeSectorSize) + 20;
-    if (!magicFound || (rootInfoOffset + 8) > mappedFile.size())
+    if (!magicFound || (rootInfoOffset + 8) > sourceSize)
     {
-        mappedFile.close();
         return;
     }
 
     // Parse root information.
-    uint32_t rootSector = *(uint32_t *)(&mappedFileData[rootInfoOffset + 0]);
-    uint32_t rootSize = *(uint32_t *)(&mappedFileData[rootInfoOffset + 4]);
-    size_t rootOffset = gameOffset + (rootSector * XeSectorSize);
-    const uint32_t MinRootSize = 13;
-    const uint32_t MaxRootSize = 32 * 1024 * 1024;
-    if ((rootSize < MinRootSize) || (rootSize > MaxRootSize))
+    uint32_t rootSector = 0;
+    uint32_t rootSize = 0;
+    if (!readBytes(rootInfoOffset + 0, &rootSector, sizeof(rootSector))
+        || !readBytes(rootInfoOffset + 4, &rootSize, sizeof(rootSize)))
     {
-        mappedFile.close();
+        return;
+    }
+
+    size_t rootOffset = gameOffset + (rootSector * XeSectorSize);
+    const uint32_t MinRootSize = 15;
+    const uint32_t MaxRootSize = 32 * 1024 * 1024;
+    if ((rootSize < MinRootSize) || (rootSize > MaxRootSize)
+        || rootOffset > sourceSize || rootSize > sourceSize - rootOffset)
+    {
         return;
     }
 
@@ -69,18 +143,23 @@ ISOFileSystem::ISOFileSystem(const std::filesystem::path &isoPath)
         std::string fileNameBase;
         size_t nodeOffset = 0;
         size_t entryOffset = 0;
+        size_t nodeSize = 0;
 
         IterationStep() = default;
-        IterationStep(std::string fileNameBase, size_t nodeOffset, size_t entryOffset) : fileNameBase(fileNameBase), nodeOffset(nodeOffset), entryOffset(entryOffset) { }
+        IterationStep(std::string fileNameBase, size_t nodeOffset, size_t entryOffset, size_t nodeSize)
+            : fileNameBase(fileNameBase), nodeOffset(nodeOffset), entryOffset(entryOffset), nodeSize(nodeSize) { }
     };
 
     std::stack<IterationStep> iterationStack;
-    iterationStack.emplace("", rootOffset, 0);
+    iterationStack.emplace("", rootOffset, 0, rootSize);
+    std::unordered_set<size_t> visitedEntries;
+    decltype(fileMap) parsedFiles;
 
     IterationStep step;
     uint16_t nodeL, nodeR;
     uint32_t sector, length;
     uint8_t attributes, nameLength;
+    uint8_t entryHeader[14];
     char fileName[256];
     const uint8_t FileAttributeDirectory = 0x10;
     while (!iterationStack.empty())
@@ -88,38 +167,49 @@ ISOFileSystem::ISOFileSystem(const std::filesystem::path &isoPath)
         step = iterationStack.top();
         iterationStack.pop();
 
+        if (step.entryOffset > step.nodeSize || sizeof(entryHeader) > step.nodeSize - step.entryOffset)
+            return;
+
         size_t infoOffset = step.nodeOffset + step.entryOffset;
-        if ((infoOffset + 14) > mappedFile.size())
+        // Reject cyclic directory graphs instead of hanging the installer.
+        if (!visitedEntries.insert(infoOffset).second)
         {
-            mappedFile.close();
             return;
         }
 
-        nodeL = *(uint16_t *)(&mappedFileData[infoOffset + 0]);
-        nodeR = *(uint16_t *)(&mappedFileData[infoOffset + 2]);
-        sector = *(uint32_t *)(&mappedFileData[infoOffset + 4]);
-        length = *(uint32_t *)(&mappedFileData[infoOffset + 8]);
-        attributes = *(uint8_t *)(&mappedFileData[infoOffset + 12]);
-        nameLength = *(uint8_t *)(&mappedFileData[infoOffset + 13]);
+        if (!readBytes(infoOffset, entryHeader, sizeof(entryHeader)))
+        {
+            return;
+        }
+
+        std::memcpy(&nodeL, &entryHeader[0], sizeof(nodeL));
+        std::memcpy(&nodeR, &entryHeader[2], sizeof(nodeR));
+        std::memcpy(&sector, &entryHeader[4], sizeof(sector));
+        std::memcpy(&length, &entryHeader[8], sizeof(length));
+        attributes = entryHeader[12];
+        nameLength = entryHeader[13];
 
         size_t nameOffset = infoOffset + 14;
-        if ((nameOffset + nameLength) > mappedFile.size())
+        if (nameLength == 0 || nameLength > step.nodeSize - step.entryOffset - sizeof(entryHeader))
         {
-            mappedFile.close();
             return;
         }
 
-        memcpy(fileName, &mappedFileData[nameOffset], nameLength);
+        if (!readBytes(nameOffset, fileName, nameLength))
+        {
+            return;
+        }
+
         fileName[nameLength] = '\0';
 
         if (nodeL)
         {
-            iterationStack.emplace(step.fileNameBase, step.nodeOffset, nodeL * 4);
+            iterationStack.emplace(step.fileNameBase, step.nodeOffset, nodeL * 4, step.nodeSize);
         }
 
         if (nodeR)
         {
-            iterationStack.emplace(step.fileNameBase, step.nodeOffset, nodeR * 4);
+            iterationStack.emplace(step.fileNameBase, step.nodeOffset, nodeR * 4, step.nodeSize);
         }
 
         std::string fileNameUTF8 = step.fileNameBase + fileName;
@@ -127,14 +217,27 @@ ISOFileSystem::ISOFileSystem(const std::filesystem::path &isoPath)
         {
             if (length > 0)
             {
-                iterationStack.emplace(fileNameUTF8 + "/", gameOffset + sector * XeSectorSize, 0);
+                const size_t directoryOffset = gameOffset + sector * XeSectorSize;
+                if (length < MinRootSize || length > MaxRootSize
+                    || directoryOffset > sourceSize || length > sourceSize - directoryOffset)
+                    return;
+
+                iterationStack.emplace(fileNameUTF8 + "/", directoryOffset, 0, length);
             }
         }
         else
         {
-            fileMap[fileNameUTF8] = { gameOffset + sector * XeSectorSize, length};
+            const size_t fileOffset = gameOffset + sector * XeSectorSize;
+            if (fileOffset > sourceSize || length > sourceSize - fileOffset)
+            {
+                continue;
+            }
+
+            parsedFiles[fileNameUTF8] = { fileOffset, length};
         }
     }
+
+    fileMap = std::move(parsedFiles);
 }
 
 bool ISOFileSystem::load(const std::string &path, uint8_t *fileData, size_t fileDataMaxByteCount) const
@@ -147,14 +250,66 @@ bool ISOFileSystem::load(const std::string &path, uint8_t *fileData, size_t file
             return false;
         }
 
-        const uint8_t *mappedFileData = mappedFile.data();
-        memcpy(fileData, &mappedFileData[std::get<0>(it->second)], std::get<1>(it->second));
+        const size_t fileOffset = std::get<0>(it->second);
+        const size_t fileSize = std::get<1>(it->second);
+        if (fileSize == 0)
+            return true;
+        if (fileData == nullptr)
+            return false;
+
+        if (mappedFile.isOpen())
+        {
+            const uint8_t *mappedFileData = mappedFile.data();
+            memcpy(fileData, &mappedFileData[fileOffset], fileSize);
+            return true;
+        }
+
+        if (!readFileRange(sourcePath, fileOffset, fileData, fileSize))
+        {
+            return false;
+        }
+
         return true;
     }
     else
     {
         return false;
     }
+}
+
+bool ISOFileSystem::stream(const std::string& path, const ChunkSink& sink) const
+{
+    const auto it = fileMap.find(path);
+    if (it == fileMap.end())
+        return false;
+    const auto [offset, length] = it->second;
+    if (offset > sourceSize || length > sourceSize - offset)
+        return false;
+    if (mappedFile.isOpen())
+    {
+        for (size_t copied = 0; copied < length;)
+        {
+            const size_t count = std::min(StreamChunkSize, length - copied);
+            if (!sink({mappedFile.data() + offset + copied, count}))
+                return false;
+            copied += count;
+        }
+        return true;
+    }
+    std::ifstream input(sourcePath, std::ios::binary);
+    if (!input || offset > static_cast<size_t>(std::numeric_limits<std::streamoff>::max()))
+        return false;
+    input.seekg(static_cast<std::streamoff>(offset));
+    std::array<uint8_t, StreamChunkSize> buffer;
+    size_t remaining = length;
+    while (remaining != 0)
+    {
+        const size_t count = std::min(buffer.size(), remaining);
+        if (!input.read(reinterpret_cast<char*>(buffer.data()), count) || !sink(std::span(buffer).first(count)))
+            return false;
+        remaining -= count;
+    }
+    return true;
 }
 
 size_t ISOFileSystem::getSize(const std::string &path) const
@@ -182,7 +337,7 @@ const std::string &ISOFileSystem::getName() const
 
 bool ISOFileSystem::empty() const 
 {
-    return !mappedFile.isOpen();
+    return fileMap.empty();
 }
 
 std::unique_ptr<ISOFileSystem> ISOFileSystem::create(const std::filesystem::path &isoPath) {

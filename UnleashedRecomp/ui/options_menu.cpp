@@ -8,6 +8,9 @@
 #include <gpu/video.h>
 #include <gpu/imgui/imgui_snapshot.h>
 #include <hid/hid.h>
+#if defined(UNLEASHED_RECOMP_IOS)
+#include <hid/touch_gamepad.h>
+#endif
 #include <kernel/heap.h>
 #include <kernel/memory.h>
 #include <locale/locale.h>
@@ -61,6 +64,9 @@ static constexpr float INFO_TEXT_MARQUEE_DELAY = 1.2f;
 
 static constexpr int32_t g_categoryCount = 4;
 static int32_t g_categoryIndex;
+#if defined(UNLEASHED_RECOMP_IOS)
+static int g_touchCategoryAxis;
+#endif
 static ImVec2 g_categoryAnimMin;
 static ImVec2 g_categoryAnimMax;
 
@@ -103,6 +109,9 @@ static EChannelConfiguration g_currentChannelConfig;
 #ifdef __ANDROID__
 static EAndroidVulkanDriver g_currentVulkanDriver;
 static EAndroidRenderMode g_currentRenderMode;
+#endif
+#if defined(__APPLE__) && TARGET_OS_IOS
+static bool g_currentMetalHUD;
 #endif
 
 static double g_appearTime = 0.0;
@@ -457,6 +466,16 @@ static bool DrawCategories()
 
     bool moveLeft = !g_lockedOnOption && inputState->GetPadState().IsTapped(SWA::eKeyState_LeftBumper);
     bool moveRight = !g_lockedOnOption && inputState->GetPadState().IsTapped(SWA::eKeyState_RightBumper);
+#if defined(UNLEASHED_RECOMP_IOS)
+    const float touchAxis = hid::IsTouchControllerActive() ? float(inputState->GetPadState().LeftStickHorizontal) : 0;
+    const int direction = touchAxis < -0.5f ? -1 : touchAxis > 0.5f ? 1 : 0;
+    if (!g_lockedOnOption && direction != g_touchCategoryAxis)
+    {
+        moveLeft |= direction < 0;
+        moveRight |= direction > 0;
+    }
+    g_touchCategoryAxis = direction;
+#endif
 
     if (moveLeft)
     {
@@ -852,6 +871,8 @@ static void DrawConfigOption(int32_t rowIndex, float yOffset, ConfigDef<T>* conf
                     {
                         // released lock, restore old value
                         config->Value = s_oldValue;
+                        if (!config->ApplyCallback && config->Callback)
+                            config->Callback(config);
 
                         g_lockedOnOption = false;
 
@@ -1243,6 +1264,10 @@ static void DrawConfigOptions()
         case 1: // INPUT
             DrawConfigOption(rowCount++, yOffset, &Config::HorizontalCamera, true);
             DrawConfigOption(rowCount++, yOffset, &Config::VerticalCamera, true);
+#if defined(UNLEASHED_RECOMP_IOS)
+            DrawConfigOption(rowCount++, yOffset, &Config::TouchCameraSensitivity, true, nullptr,
+                hid::TouchGamepad::MinCameraSensitivity, hid::TouchGamepad::DefaultCameraSensitivity, hid::TouchGamepad::MaxCameraSensitivity);
+#endif
             DrawConfigOption(rowCount++, yOffset, &Config::Vibration, true);
 #ifndef __ANDROID__
             // Window focus is a desktop concept; Android apps pause in background.
@@ -1270,10 +1295,9 @@ static void DrawConfigOptions()
 #ifdef __ANDROID__
             DrawConfigOption(rowCount++, yOffset, &Config::VulkanDriver, true);
             DrawConfigOption(rowCount++, yOffset, &Config::RenderMode, true);
-#else
-            // Windowing options make no sense on Android: the game always runs
-            // fullscreen on the one display at its native size, and the
-            // compositor vsyncs every frame regardless.
+#elif !defined(__APPLE__) || !TARGET_OS_IOS
+            // Windowing options make no sense on Android or iOS: the game always runs
+            // fullscreen on the one display at its native size.
             DrawConfigOption(rowCount++, yOffset, &Config::WindowSize,
                 !Config::Fullscreen, &Localise("Options_Desc_NotAvailableFullscreen"),
                 0, 0, (int32_t)GameWindow::GetDisplayModes().size() - 1, false);
@@ -1290,9 +1314,19 @@ static void DrawConfigOptions()
 
             DrawConfigOption(rowCount++, yOffset, &Config::AspectRatio, true);
             DrawConfigOption(rowCount++, yOffset, &Config::ResolutionScale, true, nullptr, 0.25f, 1.0f, 2.0f);
-#ifndef __ANDROID__
+#if defined(UNLEASHED_RECOMP_IOS)
+            DrawConfigOption(rowCount++, yOffset, &Config::MetalFXUpscaling, true);
+            DrawConfigOption(rowCount++, yOffset, &Config::SkipUnusedCopies, true);
+            DrawConfigOption(rowCount++, yOffset, &Config::ReuseRenderTargets, true);
+#endif
+#if !defined(__ANDROID__) && (!defined(__APPLE__) || !TARGET_OS_IOS)
             DrawConfigOption(rowCount++, yOffset, &Config::Fullscreen, true);
+#endif
+#ifndef __ANDROID__
             DrawConfigOption(rowCount++, yOffset, &Config::VSync, true);
+#endif
+#if defined(__APPLE__) && TARGET_OS_IOS
+            DrawConfigOption(rowCount++, yOffset, &Config::MetalHUD, true);
 #endif
             DrawConfigOption(rowCount++, yOffset, &Config::FPS, true, nullptr, FPS_MIN, 120, FPS_MAX);
             DrawConfigOption(rowCount++, yOffset, &Config::Brightness, true);
@@ -1826,6 +1860,9 @@ void OptionsMenu::Draw()
         || Config::VulkanDriver != g_currentVulkanDriver
         || Config::RenderMode != g_currentRenderMode
 #endif
+#if defined(__APPLE__) && TARGET_OS_IOS
+        || Config::MetalHUD != g_currentMetalHUD
+#endif
         ;
 }
 
@@ -1838,6 +1875,9 @@ void OptionsMenu::Open(bool isPause, SWA::EMenuType pauseMenuType)
     
     g_appearTime = ImGui::GetTime();
     g_categoryIndex = 0;
+#if defined(UNLEASHED_RECOMP_IOS)
+    g_touchCategoryAxis = 0;
+#endif
     g_categoryAnimMin = { 0.0f, 0.0f };
     g_categoryAnimMax = { 0.0f, 0.0f };
     g_selectedItem = nullptr;
@@ -1846,6 +1886,9 @@ void OptionsMenu::Open(bool isPause, SWA::EMenuType pauseMenuType)
 #ifdef __ANDROID__
     g_currentVulkanDriver = Config::VulkanDriver;
     g_currentRenderMode = Config::RenderMode;
+#endif
+#if defined(__APPLE__) && TARGET_OS_IOS
+    g_currentMetalHUD = Config::MetalHUD;
 #endif
 
     /* Store button state so we can track it later

@@ -1,5 +1,15 @@
 project("UnleashedRecompLib")
 
+set(UNLEASHED_RECOMP_IOS OFF)
+if (CMAKE_SYSTEM_NAME STREQUAL "iOS" OR IOS)
+    set(UNLEASHED_RECOMP_IOS ON)
+endif()
+
+set(UNLEASHED_RECOMP_USE_PREGENERATED_RECOMP OFF)
+if (UNLEASHED_RECOMP_IOS)
+    set(UNLEASHED_RECOMP_USE_PREGENERATED_RECOMP ON)
+endif()
+
 add_compile_options(
     -fno-strict-aliasing
 )
@@ -10,27 +20,30 @@ else()
     add_compile_options(-ffp-model=strict)
 endif()
 
-if (UNLEASHED_RECOMP_USE_PREBUILT_HOST_TOOLS)
-    set(UNLEASHED_RECOMP_XENON_RECOMP_COMMAND "${UNLEASHED_RECOMP_HOST_XENON_RECOMP}")
-    set(UNLEASHED_RECOMP_XENON_RECOMP_TOOL_DEPENDS "${UNLEASHED_RECOMP_HOST_XENON_RECOMP}")
-    set(UNLEASHED_RECOMP_X_DECOMPRESS_COMMAND "${UNLEASHED_RECOMP_HOST_X_DECOMPRESS}")
-    set(UNLEASHED_RECOMP_X_DECOMPRESS_TOOL_DEPENDS "${UNLEASHED_RECOMP_HOST_X_DECOMPRESS}")
-    set(UNLEASHED_RECOMP_XENOS_RECOMP_COMMAND "${UNLEASHED_RECOMP_HOST_XENOS_RECOMP}")
-    set(UNLEASHED_RECOMP_XENOS_RECOMP_TOOL_DEPENDS "${UNLEASHED_RECOMP_HOST_XENOS_RECOMP}")
-else()
-    # These paths are baked into the host tool binaries as compile-time definitions
-    # (they read this same source tree), so they only need to be set when the tools
-    # are actually being built in this pass, not when reusing prebuilt host binaries.
-    target_compile_definitions(XenonRecomp PRIVATE
-        XENON_RECOMP_CONFIG_FILE_PATH=\"${CMAKE_CURRENT_SOURCE_DIR}/config/SWA.toml\"
-        XENON_RECOMP_HEADER_FILE_PATH=\"${UNLEASHED_RECOMP_TOOLS_ROOT}/XenonRecomp/XenonUtils/ppc_context.h\")
+# iOS generates guest code and the Metal shader cache on the Mac before configuring.
+if (NOT UNLEASHED_RECOMP_USE_PREGENERATED_RECOMP)
+    if (UNLEASHED_RECOMP_USE_PREBUILT_HOST_TOOLS)
+        set(UNLEASHED_RECOMP_XENON_RECOMP_COMMAND "${UNLEASHED_RECOMP_HOST_XENON_RECOMP}")
+        set(UNLEASHED_RECOMP_XENON_RECOMP_TOOL_DEPENDS "${UNLEASHED_RECOMP_HOST_XENON_RECOMP}")
+        set(UNLEASHED_RECOMP_X_DECOMPRESS_COMMAND "${UNLEASHED_RECOMP_HOST_X_DECOMPRESS}")
+        set(UNLEASHED_RECOMP_X_DECOMPRESS_TOOL_DEPENDS "${UNLEASHED_RECOMP_HOST_X_DECOMPRESS}")
+        set(UNLEASHED_RECOMP_XENOS_RECOMP_COMMAND "${UNLEASHED_RECOMP_HOST_XENOS_RECOMP}")
+        set(UNLEASHED_RECOMP_XENOS_RECOMP_TOOL_DEPENDS "${UNLEASHED_RECOMP_HOST_XENOS_RECOMP}")
+    else()
+        # These paths are baked into the host tool binaries as compile-time definitions
+        # (they read this same source tree), so they only need to be set when the tools
+        # are actually being built in this pass, not when reusing prebuilt host binaries.
+        target_compile_definitions(XenonRecomp PRIVATE
+            XENON_RECOMP_CONFIG_FILE_PATH=\"${CMAKE_CURRENT_SOURCE_DIR}/config/SWA.toml\"
+            XENON_RECOMP_HEADER_FILE_PATH=\"${UNLEASHED_RECOMP_TOOLS_ROOT}/XenonRecomp/XenonUtils/ppc_context.h\")
 
-    set(UNLEASHED_RECOMP_XENON_RECOMP_COMMAND "$<TARGET_FILE:XenonRecomp>")
-    set(UNLEASHED_RECOMP_XENON_RECOMP_TOOL_DEPENDS XenonRecomp)
-    set(UNLEASHED_RECOMP_X_DECOMPRESS_COMMAND "$<TARGET_FILE:x_decompress>")
-    set(UNLEASHED_RECOMP_X_DECOMPRESS_TOOL_DEPENDS x_decompress)
-    set(UNLEASHED_RECOMP_XENOS_RECOMP_COMMAND "$<TARGET_FILE:XenosRecomp>")
-    set(UNLEASHED_RECOMP_XENOS_RECOMP_TOOL_DEPENDS XenosRecomp)
+        set(UNLEASHED_RECOMP_XENON_RECOMP_COMMAND "$<TARGET_FILE:XenonRecomp>")
+        set(UNLEASHED_RECOMP_XENON_RECOMP_TOOL_DEPENDS XenonRecomp)
+        set(UNLEASHED_RECOMP_X_DECOMPRESS_COMMAND "$<TARGET_FILE:x_decompress>")
+        set(UNLEASHED_RECOMP_X_DECOMPRESS_TOOL_DEPENDS x_decompress)
+        set(UNLEASHED_RECOMP_XENOS_RECOMP_COMMAND "$<TARGET_FILE:XenosRecomp>")
+        set(UNLEASHED_RECOMP_XENOS_RECOMP_TOOL_DEPENDS XenosRecomp)
+    endif()
 endif()
 
 set(UNLEASHED_RECOMP_PPC_RECOMPILED_SOURCES
@@ -44,40 +57,42 @@ foreach(i RANGE 0 260)
     list(APPEND UNLEASHED_RECOMP_PPC_RECOMPILED_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/ppc/ppc_recomp.${i}.cpp")
 endforeach()
 
-add_custom_command(
-    OUTPUT
-        "${CMAKE_CURRENT_SOURCE_DIR}/private/default_patched.xex"
-        ${UNLEASHED_RECOMP_PPC_RECOMPILED_SOURCES}
-    COMMAND
-        # The explicit arguments matter for prebuilt host tools compiled without the
-        # XENON_RECOMP_CONFIG_FILE_PATH definition: such a binary invoked bare prints its
-        # usage text and exits 0, so the rule "succeeds" without producing any outputs.
-        # Binaries that do have the baked-in paths ignore these arguments entirely.
-        ${UNLEASHED_RECOMP_XENON_RECOMP_COMMAND}
+if (NOT UNLEASHED_RECOMP_USE_PREGENERATED_RECOMP)
+    add_custom_command(
+        OUTPUT
+            "${CMAKE_CURRENT_SOURCE_DIR}/private/default_patched.xex"
+            ${UNLEASHED_RECOMP_PPC_RECOMPILED_SOURCES}
+        COMMAND
+            # The explicit arguments matter for prebuilt host tools compiled without the
+            # XENON_RECOMP_CONFIG_FILE_PATH definition: such a binary invoked bare prints its
+            # usage text and exits 0, so the rule "succeeds" without producing any outputs.
+            # Binaries that do have the baked-in paths ignore these arguments entirely.
+            ${UNLEASHED_RECOMP_XENON_RECOMP_COMMAND}
+                "${CMAKE_CURRENT_SOURCE_DIR}/config/SWA.toml"
+                "${UNLEASHED_RECOMP_TOOLS_ROOT}/XenonRecomp/XenonUtils/ppc_context.h"
+        DEPENDS
+            "${CMAKE_CURRENT_SOURCE_DIR}/private/default.xex"
+            "${CMAKE_CURRENT_SOURCE_DIR}/private/default.xexp"
             "${CMAKE_CURRENT_SOURCE_DIR}/config/SWA.toml"
-            "${UNLEASHED_RECOMP_TOOLS_ROOT}/XenonRecomp/XenonUtils/ppc_context.h"
-    DEPENDS
-        "${CMAKE_CURRENT_SOURCE_DIR}/private/default.xex"
-        "${CMAKE_CURRENT_SOURCE_DIR}/private/default.xexp"
-        "${CMAKE_CURRENT_SOURCE_DIR}/config/SWA.toml"
-        ${UNLEASHED_RECOMP_XENON_RECOMP_TOOL_DEPENDS}
-    USES_TERMINAL
-)
+            ${UNLEASHED_RECOMP_XENON_RECOMP_TOOL_DEPENDS}
+        USES_TERMINAL
+    )
 
-add_custom_command(
-    OUTPUT
-        "${CMAKE_CURRENT_SOURCE_DIR}/private/shader_decompressed.ar"
-    COMMAND
-        ${UNLEASHED_RECOMP_X_DECOMPRESS_COMMAND} "${CMAKE_CURRENT_SOURCE_DIR}/private/shader.ar" "${CMAKE_CURRENT_SOURCE_DIR}/private/shader_decompressed.ar"
-    DEPENDS
-        "${CMAKE_CURRENT_SOURCE_DIR}/private/shader.ar"
-        ${UNLEASHED_RECOMP_X_DECOMPRESS_TOOL_DEPENDS}
-)
+    add_custom_command(
+        OUTPUT
+            "${CMAKE_CURRENT_SOURCE_DIR}/private/shader_decompressed.ar"
+        COMMAND
+            ${UNLEASHED_RECOMP_X_DECOMPRESS_COMMAND} "${CMAKE_CURRENT_SOURCE_DIR}/private/shader.ar" "${CMAKE_CURRENT_SOURCE_DIR}/private/shader_decompressed.ar"
+        DEPENDS
+            "${CMAKE_CURRENT_SOURCE_DIR}/private/shader.ar"
+            ${UNLEASHED_RECOMP_X_DECOMPRESS_TOOL_DEPENDS}
+    )
+endif()
 
 set(XENOS_RECOMP_ROOT "${UNLEASHED_RECOMP_TOOLS_ROOT}/XenosRecomp/XenosRecomp")
 set(XENOS_RECOMP_INCLUDE "${XENOS_RECOMP_ROOT}/shader_common.h")
 
-if (NOT UNLEASHED_RECOMP_USE_PREBUILT_HOST_TOOLS)
+if (NOT UNLEASHED_RECOMP_USE_PREBUILT_HOST_TOOLS AND NOT UNLEASHED_RECOMP_USE_PREGENERATED_RECOMP)
     target_compile_definitions(XenosRecomp PRIVATE
         XENOS_RECOMP_INPUT=\"${CMAKE_CURRENT_SOURCE_DIR}/private\"
         XENOS_RECOMP_OUTPUT=\"${CMAKE_CURRENT_SOURCE_DIR}/shader/shader_cache.cpp\"
@@ -91,30 +106,58 @@ file(GLOB XENOS_RECOMP_SOURCES
     "${XENOS_RECOMP_ROOT}/*.cpp"
 )
 
-add_custom_command(
-    OUTPUT
-        "${CMAKE_CURRENT_SOURCE_DIR}/shader/shader_cache.cpp"
-    COMMAND
-        ${UNLEASHED_RECOMP_XENOS_RECOMP_COMMAND}
-            "${CMAKE_CURRENT_SOURCE_DIR}/private"
+if (NOT UNLEASHED_RECOMP_USE_PREGENERATED_RECOMP)
+    add_custom_command(
+        OUTPUT
             "${CMAKE_CURRENT_SOURCE_DIR}/shader/shader_cache.cpp"
-            "${XENOS_RECOMP_INCLUDE}"
-    DEPENDS
-        "${CMAKE_CURRENT_SOURCE_DIR}/private/default_patched.xex"
-        "${CMAKE_CURRENT_SOURCE_DIR}/private/shader_decompressed.ar"
-        ${XENOS_RECOMP_SOURCES}
-        ${XENOS_RECOMP_INCLUDE}
-        ${UNLEASHED_RECOMP_XENOS_RECOMP_TOOL_DEPENDS}
-    USES_TERMINAL
-)
+        COMMAND
+            ${UNLEASHED_RECOMP_XENOS_RECOMP_COMMAND}
+                "${CMAKE_CURRENT_SOURCE_DIR}/private"
+                "${CMAKE_CURRENT_SOURCE_DIR}/shader/shader_cache.cpp"
+                "${XENOS_RECOMP_INCLUDE}"
+        DEPENDS
+            "${CMAKE_CURRENT_SOURCE_DIR}/private/default_patched.xex"
+            "${CMAKE_CURRENT_SOURCE_DIR}/private/shader_decompressed.ar"
+            ${XENOS_RECOMP_SOURCES}
+            ${XENOS_RECOMP_INCLUDE}
+            ${UNLEASHED_RECOMP_XENOS_RECOMP_TOOL_DEPENDS}
+        USES_TERMINAL
+    )
+endif()
+
+if (UNLEASHED_RECOMP_USE_PREGENERATED_RECOMP)
+    foreach(input IN LISTS UNLEASHED_RECOMP_PPC_RECOMPILED_SOURCES)
+        if(NOT EXISTS "${input}")
+            message(FATAL_ERROR "Missing generated recompilation input: ${input}. Run ios/prepare.py and ios/generate.py first; see ios/README.md.")
+        endif()
+    endforeach()
+    # The iOS cache has a different layout from the one the vendored XenosRecomp
+    # writes into shader/, so it lives outside the source tree.
+    set(UNLEASHED_RECOMP_SHADER_CACHE_SOURCE "${UNLEASHED_RECOMP_IOS_GENERATED_ROOT}/shader_cache.cpp")
+    include("${CMAKE_SOURCE_DIR}/cmake/ValidateIOSShaderCache.cmake")
+    unleashed_validate_ios_shader_cache("${UNLEASHED_RECOMP_SHADER_CACHE_SOURCE}" "${CMAKE_OSX_DEPLOYMENT_TARGET}")
+else()
+    set(UNLEASHED_RECOMP_SHADER_CACHE_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/shader/shader_cache.cpp")
+endif()
 
 add_library(UnleashedRecompLib 
     ${UNLEASHED_RECOMP_PPC_RECOMPILED_SOURCES}
     "shader/shader_cache.h"
-    "shader/shader_cache.cpp"
+    "${UNLEASHED_RECOMP_SHADER_CACHE_SOURCE}"
 )
 
+if (UNLEASHED_RECOMP_IOS)
+    target_compile_definitions(UnleashedRecompLib PUBLIC
+        UNLEASHED_RECOMP_PPC_BOUNDS_CHECK
+    )
+
+    target_compile_options(UnleashedRecompLib PRIVATE
+        "$<$<CONFIG:Debug>:-O2>"
+    )
+endif()
+
 target_include_directories(UnleashedRecompLib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_include_directories(UnleashedRecompLib PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/shader")
 target_include_directories(UnleashedRecompLib PRIVATE "${UNLEASHED_RECOMP_TOOLS_ROOT}/XenonRecomp/thirdparty/simde")
 # Pulls ppc/ppc_detail.h (tracked, unlike the generated rest of ppc/) into the
 # generated ppc_config.h: hardens PPC_CALL_INDIRECT_FUNC against out-of-range

@@ -2,6 +2,11 @@
 #include <os/logger.h>
 #include <ui/game_window.h>
 #include <user/paths.h>
+#if defined(UNLEASHED_RECOMP_IOS)
+#include <hid/touch_gamepad.h>
+#include <ui/ios_event_loop.h>
+#include <ui/ios_touch_controls.h>
+#endif
 
 std::vector<IConfigDef*> g_configDefinitions;
 
@@ -325,6 +330,9 @@ CONFIG_DEFINE_ENUM_TEMPLATE(EGraphicsAPI)
     { "Auto", EGraphicsAPI::Auto },
 #ifdef UNLEASHED_RECOMP_D3D12
     { "D3D12",  EGraphicsAPI::D3D12 },
+#endif
+#ifdef UNLEASHED_RECOMP_METAL
+    { "Metal",  EGraphicsAPI::Metal },
 #endif
     { "Vulkan", EGraphicsAPI::Vulkan }
 };
@@ -804,6 +812,18 @@ std::filesystem::path Config::GetConfigPath()
 
 void Config::CreateCallbacks()
 {
+#if defined(UNLEASHED_RECOMP_IOS)
+    Config::FPS.Callback = [](ConfigDef<int32_t>* def)
+    {
+        SetIOSFrameRateLimit(def->Value);
+    };
+    Config::TouchCameraSensitivity.Callback = [](ConfigDef<float>* def)
+    {
+        def->Value = hid::TouchGamepad::ClampCameraSensitivity(def->Value);
+        SetIOSTouchCameraSensitivity(def->Value);
+    };
+#endif
+
     Config::WindowSize.LockCallback = [](ConfigDef<int32_t>* def)
     {
         // Try matching the current window size with a known configuration.
@@ -893,8 +913,16 @@ void Config::Save()
 
     auto userPath = GetUserPath();
 
-    if (!std::filesystem::exists(userPath))
-        std::filesystem::create_directories(userPath);
+    std::error_code ec;
+    if (!std::filesystem::exists(userPath, ec))
+    {
+        std::filesystem::create_directories(userPath, ec);
+        if (ec)
+        {
+            LOGFN_ERROR("Failed to create user directory '{}': {}", userPath.string().c_str(), ec.message().c_str());
+            return;
+        }
+    }
 
     std::string result;
     std::string section;

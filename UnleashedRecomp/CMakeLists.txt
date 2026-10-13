@@ -1,7 +1,34 @@
 project("UnleashedRecomp")
 
+set(UNLEASHED_RECOMP_IOS OFF)
+if (CMAKE_SYSTEM_NAME STREQUAL "iOS" OR IOS)
+    set(UNLEASHED_RECOMP_IOS ON)
+endif()
+
+set(UNLEASHED_RECOMP_IOS_BUNDLE_ID "io.github.hedgedev.unleashedrecomp" CACHE STRING "iOS bundle identifier")
+set(UNLEASHED_RECOMP_IOS_DEVELOPMENT_TEAM "" CACHE STRING "Apple Development Team ID for iOS signing")
+set(UNLEASHED_RECOMP_IOS_CODE_SIGN_IDENTITY "Apple Development" CACHE STRING "Code signing identity for iOS")
+set(UNLEASHED_RECOMP_IOS_CODE_SIGN_STYLE "Automatic" CACHE STRING "iOS code sign style (Automatic or Manual)")
+set(UNLEASHED_RECOMP_IOS_PROVISIONING_PROFILE_SPECIFIER "" CACHE STRING "Provisioning profile specifier for iOS signing")
+option(UNLEASHED_RECOMP_IOS_ENABLE_CODE_SIGNING "Enable code signing for iOS builds" ON)
+option(UNLEASHED_RECOMP_IOS_LOW_MEM_INSTALLER "Load fewer installer textures on iOS to reduce memory usage" ON)
+
+if (UNLEASHED_RECOMP_IOS AND NOT UNLEASHED_RECOMP_IOS_DEVELOPMENT_TEAM)
+    if (DEFINED ENV{DEVELOPMENT_TEAM} AND NOT "$ENV{DEVELOPMENT_TEAM}" STREQUAL "")
+        set(UNLEASHED_RECOMP_IOS_DEVELOPMENT_TEAM "$ENV{DEVELOPMENT_TEAM}" CACHE STRING "Apple Development Team ID for iOS signing" FORCE)
+    elseif (DEFINED ENV{APPLE_DEVELOPMENT_TEAM} AND NOT "$ENV{APPLE_DEVELOPMENT_TEAM}" STREQUAL "")
+        set(UNLEASHED_RECOMP_IOS_DEVELOPMENT_TEAM "$ENV{APPLE_DEVELOPMENT_TEAM}" CACHE STRING "Apple Development Team ID for iOS signing" FORCE)
+    endif()
+endif()
+
 if (WIN32)
     option(UNLEASHED_RECOMP_D3D12 "Add D3D12 support for rendering" ON)
+endif()
+
+# Metal needs the AIR shader cache from the iOS XenosRecomp; desktop macOS
+# keeps using Vulkan through MoltenVK.
+if (UNLEASHED_RECOMP_IOS)
+    option(UNLEASHED_RECOMP_METAL "Add Metal support for rendering" ON)
 endif()
 
 if (CMAKE_SYSTEM_NAME MATCHES "Linux")
@@ -25,6 +52,15 @@ function(BIN2C)
 
     if(NOT BIN2C_ARGS_COMPRESSION_TYPE)
         set(BIN2C_ARGS_COMPRESSION_TYPE "none")
+    endif()
+
+    if (UNLEASHED_RECOMP_IOS)
+        if(NOT EXISTS "${BIN2C_ARGS_DEST_FILE}.c" OR NOT EXISTS "${BIN2C_ARGS_DEST_FILE}.h")
+            message(FATAL_ERROR "Missing generated resource ${BIN2C_ARGS_DEST_FILE}.c/.h. Run ios/prepare.py and ios/generate.py first; see ios/README.md.")
+        endif()
+        set_source_files_properties(${BIN2C_ARGS_DEST_FILE}.c PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+        target_sources(${BIN2C_ARGS_TARGET_OBJ} PRIVATE ${BIN2C_ARGS_DEST_FILE}.c)
+        return()
     endif()
 
     if (UNLEASHED_RECOMP_USE_PREBUILT_HOST_TOOLS)
@@ -66,10 +102,11 @@ else()
     add_compile_options(-ffp-model=strict)
 endif()
 
-if (NOT ANDROID)
+if (NOT ANDROID AND NOT UNLEASHED_RECOMP_IOS)
     # On Android, main() must stay as SDL_main() (via SDL_main.h's macro) so that
     # SDL2's Android JNI glue (which calls SDL_main from a thread spawned by
     # SDLActivity's nativeInit) has something to call; SDL_MAIN_HANDLED would suppress that.
+    # On iOS, SDL2main starts UIKit and then calls SDL_main the same way.
     add_compile_definitions(SDL_MAIN_HANDLED)
 endif()
 
@@ -183,14 +220,23 @@ set(UNLEASHED_RECOMP_UI_CXX_SOURCES
     "ui/message_window.cpp"
     "ui/options_menu.cpp"
     "ui/options_menu_thumbnails.cpp"
-    "ui/touch_controls.cpp"
     "ui/tv_static.cpp"
 )
+
+if (NOT UNLEASHED_RECOMP_IOS)
+    list(APPEND UNLEASHED_RECOMP_UI_CXX_SOURCES "ui/touch_controls.cpp")
+endif()
 
 # The GUI installer wizard (native file picker + wizard UI) is not built for Android;
 # game files are pushed manually instead. See main.cpp / gpu/video.cpp __ANDROID__ guards.
 if (NOT ANDROID)
     list(APPEND UNLEASHED_RECOMP_UI_CXX_SOURCES "ui/installer_wizard.cpp")
+endif()
+
+if (UNLEASHED_RECOMP_IOS)
+    list(APPEND UNLEASHED_RECOMP_UI_CXX_SOURCES "ui/ios_file_picker.mm" "ui/ios_event_loop.mm" "ui/ios_touch_controls.mm")
+    set_source_files_properties(ui/ios_file_picker.mm ui/ios_event_loop.mm ui/ios_touch_controls.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+    set_source_files_properties(ui/ios_event_loop.mm ui/ios_touch_controls.mm PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 endif()
 
 set(UNLEASHED_RECOMP_INSTALL_CXX_SOURCES
@@ -292,6 +338,21 @@ if (NOT ${CMAKE_BUILD_TYPE} MATCHES "Release")
     set(SHOW_GIT_INFO_AND_BUILD_TYPE 1)
 endif()
 
+if (UNLEASHED_RECOMP_METAL)
+    set(XCRUN_TOOL "/usr/bin/xcrun")
+    set(UNLEASHED_RECOMP_APPLE_SDK "macosx")
+    if (UNLEASHED_RECOMP_IOS)
+        set(UNLEASHED_RECOMP_APPLE_SDK "iphoneos")
+    endif()
+    if (CMAKE_OSX_DEPLOYMENT_TARGET)
+        if (UNLEASHED_RECOMP_IOS)
+            set(UNLEASHED_RECOMP_METAL_TARGET "air64-apple-ios${CMAKE_OSX_DEPLOYMENT_TARGET}")
+        else()
+            set(UNLEASHED_RECOMP_METAL_TARGET "air64-apple-macos${CMAKE_OSX_DEPLOYMENT_TARGET}")
+        endif()
+    endif()
+endif()
+
 GenerateVersionSources(
     OUTPUT_DIR ${PROJECT_SOURCE_DIR}
     VERSION_TXT ${VERSION_TXT}
@@ -329,12 +390,14 @@ if (WIN32)
     if (${CMAKE_BUILD_TYPE} MATCHES "Release")
         target_link_options(UnleashedRecomp PRIVATE "/SUBSYSTEM:WINDOWS" "/ENTRY:mainCRTStartup")
     endif()
-elseif (APPLE)
+elseif (APPLE AND NOT UNLEASHED_RECOMP_IOS)
     # Create version number for app bundle.
     CreateVersionString(
         VERSION_TXT ${VERSION_TXT}
+        OUTPUT_CSV 1
         OUTPUT_VAR MACOS_BUNDLE_VERSION
     )
+    string(REPLACE "," "." MACOS_BUNDLE_VERSION "${MACOS_BUNDLE_VERSION}")
 
     add_executable(UnleashedRecomp MACOSX_BUNDLE
         ${UNLEASHED_RECOMP_CXX_SOURCES}
@@ -384,6 +447,71 @@ elseif (ANDROID)
     # than a standalone executable, since Android apps cannot be launched as bare ELF binaries.
     add_library(UnleashedRecomp SHARED ${UNLEASHED_RECOMP_CXX_SOURCES})
     set_target_properties(UnleashedRecomp PROPERTIES OUTPUT_NAME "main")
+elseif (UNLEASHED_RECOMP_IOS)
+    CreateVersionString(
+        VERSION_TXT ${VERSION_TXT}
+        OUTPUT_CSV 1
+        OUTPUT_VAR IOS_BUNDLE_VERSION
+    )
+    string(REPLACE "," "." IOS_BUNDLE_VERSION "${IOS_BUNDLE_VERSION}")
+
+    add_executable(UnleashedRecomp MACOSX_BUNDLE ${UNLEASHED_RECOMP_CXX_SOURCES})
+    set(UNLEASHED_RECOMP_IOS_ASSET_CATALOG ${CMAKE_CURRENT_SOURCE_DIR}/res/ios/Assets.xcassets)
+    set_source_files_properties(${UNLEASHED_RECOMP_IOS_ASSET_CATALOG} PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
+    target_sources(UnleashedRecomp PRIVATE ${UNLEASHED_RECOMP_IOS_ASSET_CATALOG})
+
+    set(UNLEASHED_RECOMP_IOS_XCODE_PROPS
+        OUTPUT_NAME "Unleashed Recompiled"
+        MACOSX_BUNDLE_INFO_PLIST ${CMAKE_CURRENT_SOURCE_DIR}/res/ios/Info.plist.in
+        MACOSX_BUNDLE_GUI_IDENTIFIER ${UNLEASHED_RECOMP_IOS_BUNDLE_ID}
+        MACOSX_BUNDLE_BUNDLE_NAME "Unleashed"
+        MACOSX_BUNDLE_BUNDLE_VERSION ${IOS_BUNDLE_VERSION}
+        MACOSX_BUNDLE_SHORT_VERSION_STRING ${IOS_BUNDLE_VERSION}
+        XCODE_ATTRIBUTE_INFOPLIST_KEY_CFBundleDisplayName "Unleashed"
+        XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER ${UNLEASHED_RECOMP_IOS_BUNDLE_ID}
+        XCODE_ATTRIBUTE_TARGETED_DEVICE_FAMILY "1,2"
+        XCODE_ATTRIBUTE_ASSETCATALOG_COMPILER_APPICON_NAME AppIcon
+        XCODE_ATTRIBUTE_CODE_SIGN_STYLE ${UNLEASHED_RECOMP_IOS_CODE_SIGN_STYLE}
+        XCODE_ATTRIBUTE_INSTALL_PATH "$(LOCAL_APPS_DIR)"
+        XCODE_ATTRIBUTE_SKIP_INSTALL "NO"
+        XCODE_ATTRIBUTE_ENABLE_BITCODE "NO"
+    )
+
+    if (NOT UNLEASHED_RECOMP_IOS_ENABLE_CODE_SIGNING)
+        list(APPEND UNLEASHED_RECOMP_IOS_XCODE_PROPS
+            XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED "NO"
+            XCODE_ATTRIBUTE_CODE_SIGNING_REQUIRED "NO"
+        )
+    endif()
+
+    if (UNLEASHED_RECOMP_IOS_ENABLE_CODE_SIGNING AND UNLEASHED_RECOMP_IOS_CODE_SIGN_IDENTITY)
+        list(APPEND UNLEASHED_RECOMP_IOS_XCODE_PROPS
+            XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY ${UNLEASHED_RECOMP_IOS_CODE_SIGN_IDENTITY}
+        )
+    endif()
+
+    if (UNLEASHED_RECOMP_IOS_ENABLE_CODE_SIGNING AND UNLEASHED_RECOMP_IOS_DEVELOPMENT_TEAM)
+        list(APPEND UNLEASHED_RECOMP_IOS_XCODE_PROPS
+            XCODE_ATTRIBUTE_DEVELOPMENT_TEAM ${UNLEASHED_RECOMP_IOS_DEVELOPMENT_TEAM}
+        )
+    elseif (UNLEASHED_RECOMP_IOS_ENABLE_CODE_SIGNING)
+        message(WARNING "iOS code signing is enabled but UNLEASHED_RECOMP_IOS_DEVELOPMENT_TEAM is not set. If 'Gather provisioning inputs' fails, set -DUNLEASHED_RECOMP_IOS_DEVELOPMENT_TEAM=<TEAM_ID> or disable signing with -DUNLEASHED_RECOMP_IOS_ENABLE_CODE_SIGNING=OFF.")
+    endif()
+
+    if (UNLEASHED_RECOMP_IOS_ENABLE_CODE_SIGNING AND UNLEASHED_RECOMP_IOS_PROVISIONING_PROFILE_SPECIFIER)
+        list(APPEND UNLEASHED_RECOMP_IOS_XCODE_PROPS
+            XCODE_ATTRIBUTE_PROVISIONING_PROFILE_SPECIFIER ${UNLEASHED_RECOMP_IOS_PROVISIONING_PROFILE_SPECIFIER}
+        )
+    endif()
+
+    set_target_properties(UnleashedRecomp PROPERTIES
+        ${UNLEASHED_RECOMP_IOS_XCODE_PROPS}
+    )
+
+    target_compile_definitions(UnleashedRecomp PRIVATE UNLEASHED_RECOMP_IOS UNLEASHED_RECOMP_IOS_INSTALLER_PNGS)
+    if (UNLEASHED_RECOMP_IOS_LOW_MEM_INSTALLER)
+        target_compile_definitions(UnleashedRecomp PRIVATE UNLEASHED_RECOMP_IOS_LOW_MEM_INSTALLER)
+    endif()
 else()
     add_executable(UnleashedRecomp ${UNLEASHED_RECOMP_CXX_SOURCES})
 endif()
@@ -409,7 +537,12 @@ if (ANDROID)
     target_link_libraries(UnleashedRecomp PRIVATE adrenotools)
 endif()
 
-find_package(CURL REQUIRED)
+if(NOT TARGET CURL::libcurl)
+    find_package(CURL REQUIRED)
+endif()
+if(NOT TARGET fmt::fmt)
+    find_package(fmt CONFIG REQUIRED)
+endif()
 
 if (UNLEASHED_RECOMP_D3D12)
     find_package(directx-headers CONFIG REQUIRED)
@@ -430,6 +563,10 @@ if (UNLEASHED_RECOMP_D3D12)
         Microsoft::DXIL
         dxgi
     )
+endif()
+
+if (UNLEASHED_RECOMP_METAL)
+    target_compile_definitions(UnleashedRecomp PRIVATE UNLEASHED_RECOMP_METAL)
 endif()
 
 if (WIN32)
@@ -459,7 +596,12 @@ target_link_libraries(UnleashedRecomp PRIVATE
     plume
 )
 
-if (NOT ANDROID)
+if (UNLEASHED_RECOMP_IOS AND TARGET SDL2::SDL2main)
+    target_link_libraries(UnleashedRecomp PRIVATE SDL2::SDL2main)
+endif()
+
+if (TARGET nfd::nfd)
+    target_compile_definitions(UnleashedRecomp PRIVATE UNLEASHED_RECOMP_HAS_NFD)
     target_link_libraries(UnleashedRecomp PRIVATE nfd::nfd)
 endif()
 
@@ -477,23 +619,47 @@ endif()
 
 target_precompile_headers(UnleashedRecomp PUBLIC ${UNLEASHED_RECOMP_PRECOMPILED_HEADERS})
 
+include("${CMAKE_SOURCE_DIR}/cmake/CompileMetalShader.cmake")
+
 function(compile_shader FILE_PATH TARGET_NAME)
-    set(FILE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/gpu/shader/${FILE_PATH}.hlsl)
-    cmake_path(GET FILE_PATH STEM VARIABLE_NAME)
+    set(HLSL_FILE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/gpu/shader/hlsl/${FILE_PATH}.hlsl)
+    set(MSL_FILE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/gpu/shader/msl/${FILE_PATH}.metal)
+    cmake_path(GET HLSL_FILE_PATH STEM HLSL_NAME)
+    cmake_path(GET MSL_FILE_PATH STEM MSL_NAME)
+    file(GLOB HLSL_INCLUDES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/gpu/shader/hlsl/*.hlsli")
+    set(SHADER_COMMON_INCLUDE "${UNLEASHED_RECOMP_TOOLS_ROOT}/XenosRecomp/XenosRecomp/shader_common.h")
+    list(APPEND HLSL_INCLUDES "${SHADER_COMMON_INCLUDE}")
+
+    if (UNLEASHED_RECOMP_METAL)
+        # Only the iOS XenosRecomp's shader_common.h has the Metal definitions.
+        unleashed_compile_metal_shader(UnleashedRecomp "${MSL_FILE_PATH}" "${MSL_NAME}"
+            "${UNLEASHED_RECOMP_IOS_DEPS_ROOT}/XenosRecomp/XenosRecomp/shader_common.h")
+    endif()
+
+    if (UNLEASHED_RECOMP_IOS AND NOT DIRECTX_DXC_TOOL)
+        if (NOT EXISTS ${HLSL_FILE_PATH}.spirv.h)
+            message(FATAL_ERROR "Missing pre-generated SPIR-V header for iOS build: ${HLSL_FILE_PATH}.spirv.h")
+        endif()
+        target_sources(UnleashedRecomp PRIVATE ${HLSL_FILE_PATH}.spirv.h)
+        return()
+    endif()
+
     if (UNLEASHED_RECOMP_D3D12)
         add_custom_command(
-            OUTPUT ${FILE_PATH}.dxil.h
-            COMMAND ${DIRECTX_DXC_TOOL} -T ${TARGET_NAME} -HV 2021 -all-resources-bound -Wno-ignored-attributes -Fh ${FILE_PATH}.dxil.h ${FILE_PATH} -Vn g_${VARIABLE_NAME}_dxil
-            DEPENDS ${FILE_PATH}
+            OUTPUT ${HLSL_FILE_PATH}.dxil.h
+            COMMAND ${DIRECTX_DXC_TOOL} -T ${TARGET_NAME} -HV 2021 -all-resources-bound -Wno-ignored-attributes -E shaderMain -Fh ${HLSL_FILE_PATH}.dxil.h ${HLSL_FILE_PATH} -Vn g_${HLSL_NAME}_dxil
+            DEPENDS ${HLSL_FILE_PATH} ${HLSL_INCLUDES}
+            VERBATIM
         )
-        target_sources(UnleashedRecomp PRIVATE ${FILE_PATH}.dxil.h)
+        target_sources(UnleashedRecomp PRIVATE ${HLSL_FILE_PATH}.dxil.h)
     endif()
     add_custom_command(
-        OUTPUT ${FILE_PATH}.spirv.h
-        COMMAND ${DIRECTX_DXC_TOOL} -T ${TARGET_NAME} -HV 2021 -all-resources-bound -spirv -fvk-use-dx-layout ${ARGN} -Fh ${FILE_PATH}.spirv.h ${FILE_PATH} -Vn g_${VARIABLE_NAME}_spirv
-        DEPENDS ${FILE_PATH}
+        OUTPUT ${HLSL_FILE_PATH}.spirv.h
+        COMMAND ${DIRECTX_DXC_TOOL} -T ${TARGET_NAME} -HV 2021 -all-resources-bound -spirv -fvk-use-dx-layout ${ARGN} -E shaderMain -Fh ${HLSL_FILE_PATH}.spirv.h ${HLSL_FILE_PATH} -Vn g_${HLSL_NAME}_spirv
+        DEPENDS ${HLSL_FILE_PATH} ${HLSL_INCLUDES}
+        VERBATIM
     )
-    target_sources(UnleashedRecomp PRIVATE ${FILE_PATH}.spirv.h)
+    target_sources(UnleashedRecomp PRIVATE ${HLSL_FILE_PATH}.spirv.h)
 endfunction()
 
 function(compile_vertex_shader FILE_PATH)
@@ -553,6 +719,14 @@ BIN2C(TARGET_OBJ UnleashedRecomp SOURCE_FILE "${RESOURCES_SOURCE_PATH}/images/in
 BIN2C(TARGET_OBJ UnleashedRecomp SOURCE_FILE "${RESOURCES_SOURCE_PATH}/images/installer/install_006.dds" DEST_FILE "${RESOURCES_OUTPUT_PATH}/images/installer/install_006.dds" ARRAY_NAME "g_install_006" COMPRESSION_TYPE "zstd")
 BIN2C(TARGET_OBJ UnleashedRecomp SOURCE_FILE "${RESOURCES_SOURCE_PATH}/images/installer/install_007.dds" DEST_FILE "${RESOURCES_OUTPUT_PATH}/images/installer/install_007.dds" ARRAY_NAME "g_install_007" COMPRESSION_TYPE "zstd")
 BIN2C(TARGET_OBJ UnleashedRecomp SOURCE_FILE "${RESOURCES_SOURCE_PATH}/images/installer/install_008.dds" DEST_FILE "${RESOURCES_OUTPUT_PATH}/images/installer/install_008.dds" ARRAY_NAME "g_install_008" COMPRESSION_TYPE "zstd")
+BIN2C(TARGET_OBJ UnleashedRecomp SOURCE_FILE "${RESOURCES_SOURCE_PATH}/images/installer/raw/install_001.png" DEST_FILE "${RESOURCES_OUTPUT_PATH}/images/installer/raw/install_001.png" ARRAY_NAME "g_install_001_png" COMPRESSION_TYPE "zstd")
+BIN2C(TARGET_OBJ UnleashedRecomp SOURCE_FILE "${RESOURCES_SOURCE_PATH}/images/installer/raw/install_002.png" DEST_FILE "${RESOURCES_OUTPUT_PATH}/images/installer/raw/install_002.png" ARRAY_NAME "g_install_002_png" COMPRESSION_TYPE "zstd")
+BIN2C(TARGET_OBJ UnleashedRecomp SOURCE_FILE "${RESOURCES_SOURCE_PATH}/images/installer/raw/install_003.png" DEST_FILE "${RESOURCES_OUTPUT_PATH}/images/installer/raw/install_003.png" ARRAY_NAME "g_install_003_png" COMPRESSION_TYPE "zstd")
+BIN2C(TARGET_OBJ UnleashedRecomp SOURCE_FILE "${RESOURCES_SOURCE_PATH}/images/installer/raw/install_004.png" DEST_FILE "${RESOURCES_OUTPUT_PATH}/images/installer/raw/install_004.png" ARRAY_NAME "g_install_004_png" COMPRESSION_TYPE "zstd")
+BIN2C(TARGET_OBJ UnleashedRecomp SOURCE_FILE "${RESOURCES_SOURCE_PATH}/images/installer/raw/install_005.png" DEST_FILE "${RESOURCES_OUTPUT_PATH}/images/installer/raw/install_005.png" ARRAY_NAME "g_install_005_png" COMPRESSION_TYPE "zstd")
+BIN2C(TARGET_OBJ UnleashedRecomp SOURCE_FILE "${RESOURCES_SOURCE_PATH}/images/installer/raw/install_006.png" DEST_FILE "${RESOURCES_OUTPUT_PATH}/images/installer/raw/install_006.png" ARRAY_NAME "g_install_006_png" COMPRESSION_TYPE "zstd")
+BIN2C(TARGET_OBJ UnleashedRecomp SOURCE_FILE "${RESOURCES_SOURCE_PATH}/images/installer/raw/install_007.png" DEST_FILE "${RESOURCES_OUTPUT_PATH}/images/installer/raw/install_007.png" ARRAY_NAME "g_install_007_png" COMPRESSION_TYPE "zstd")
+BIN2C(TARGET_OBJ UnleashedRecomp SOURCE_FILE "${RESOURCES_SOURCE_PATH}/images/installer/raw/install_008.png" DEST_FILE "${RESOURCES_OUTPUT_PATH}/images/installer/raw/install_008.png" ARRAY_NAME "g_install_008_png" COMPRESSION_TYPE "zstd")
 BIN2C(TARGET_OBJ UnleashedRecomp SOURCE_FILE "${RESOURCES_SOURCE_PATH}/images/installer/miles_electric_icon.dds" DEST_FILE "${RESOURCES_OUTPUT_PATH}/images/installer/miles_electric_icon.dds" ARRAY_NAME "g_miles_electric_icon" COMPRESSION_TYPE "zstd")
 BIN2C(TARGET_OBJ UnleashedRecomp SOURCE_FILE "${RESOURCES_SOURCE_PATH}/images/installer/pulse_install.dds" DEST_FILE "${RESOURCES_OUTPUT_PATH}/images/installer/pulse_install.dds" ARRAY_NAME "g_pulse_install" COMPRESSION_TYPE "zstd")
 
@@ -626,3 +800,14 @@ BIN2C(TARGET_OBJ UnleashedRecomp SOURCE_FILE "${RESOURCES_SOURCE_PATH}/sounds/sy
 BIN2C(TARGET_OBJ UnleashedRecomp SOURCE_FILE "${RESOURCES_SOURCE_PATH}/sounds/sys_actstg_pausedecide.ogg" DEST_FILE "${RESOURCES_OUTPUT_PATH}/sounds/sys_actstg_pausedecide.ogg" ARRAY_NAME "g_sys_actstg_pausedecide")
 BIN2C(TARGET_OBJ UnleashedRecomp SOURCE_FILE "${RESOURCES_SOURCE_PATH}/sounds/sys_actstg_pausewinclose.ogg" DEST_FILE "${RESOURCES_OUTPUT_PATH}/sounds/sys_actstg_pausewinclose.ogg" ARRAY_NAME "g_sys_actstg_pausewinclose")
 BIN2C(TARGET_OBJ UnleashedRecomp SOURCE_FILE "${RESOURCES_SOURCE_PATH}/sounds/sys_actstg_pausewinopen.ogg" DEST_FILE "${RESOURCES_OUTPUT_PATH}/sounds/sys_actstg_pausewinopen.ogg" ARRAY_NAME "g_sys_actstg_pausewinopen")
+
+# Generate host-side resources/recompilation without linking a macOS app.
+# This also prepares the shared inputs consumed by the iOS cross-build.
+if (NOT UNLEASHED_RECOMP_IOS)
+    get_target_property(ARTIFACT_SOURCES UnleashedRecomp SOURCES)
+    list(FILTER ARTIFACT_SOURCES INCLUDE REGEX "\\.c$|\\.spirv\\.h$|\\.dxil\\.h$")
+    add_custom_target(UnleashedRecompArtifacts DEPENDS
+        ${ARTIFACT_SOURCES}
+        "${CMAKE_SOURCE_DIR}/UnleashedRecompLib/ppc/ppc_recomp_shared.h"
+        "${CMAKE_SOURCE_DIR}/UnleashedRecompLib/shader/shader_cache.cpp")
+endif()

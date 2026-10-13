@@ -35,10 +35,10 @@ iPad layouts were checked in the Simulator only. Bluetooth game controllers have
 
 ## Build the app
 
-The port is built from a pinned upstream iOS tree plus the patches in [`ios/`](ios). The full procedure is in [ios/README.md](ios/README.md). In short, from the repository root:
+iOS builds from the same game sources as the Android port; only the renderer library, SDL and the shader translator use iOS-specific versions, downloaded by `ios/prepare.py`. The full procedure is in [ios/README.md](ios/README.md). In short, from the repository root:
 
 1. Put your own `default.xex`, `default.xexp` and `shader.ar` in `UnleashedRecompLib/private/`.
-2. Run `python3 ios/prepare.py`, build the host tools, then `python3 ios/generate.py`.
+2. Run `python3 ios/prepare.py` (downloads the iOS dependencies), build the host tools, then `python3 ios/generate.py`.
 3. Configure the Xcode project with your Team ID and a unique bundle ID, and build the `UnleashedRecomp` target in Release.
 4. Either install straight from Xcode to a connected device, or package an IPA for sideloading:
 
@@ -114,7 +114,7 @@ For bug reports, attach `unleashedrecomp.log` from the app folder and describe t
 - [ios/README.md](ios/README.md): build pipeline, patches and diagnostic launch flags (`UNLEASHED_IOS_FRAME_DIAGNOSTICS`, pass and resolve profiling, MetalFX overrides).
 - [docs/IOS_PORTING.md](docs/IOS_PORTING.md): the full engineering log, covering DVFS-aware measurement at a fixed GPU clock, per-pass costs, frame-pacing fixes and the resolve-copy work.
 - [tools/ios_probe](tools/ios_probe): a standalone Metal capability probe for new devices.
-- The Android sources in this repository are unchanged from upstream; see the [Android port](https://github.com/SansNope/UnleashedRecomp-Android) for its documentation.
+- Android and iOS share one codebase, so features land on both. The Android build works as in the [Android port](https://github.com/SansNope/UnleashedRecomp-Android); see its documentation. Platform-specific code is behind `__ANDROID__` and `UNLEASHED_RECOMP_IOS`.
 
 ## AI-assisted development
 

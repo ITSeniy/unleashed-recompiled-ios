@@ -7,12 +7,45 @@
 #include <os/logger.h>
 #include <user/config.h>
 #include <stdafx.h>
+#include <bit>
+
+#if defined(UNLEASHED_RECOMP_IOS)
+struct FileHandle;
+
+// Frame diagnostics: report guest file reads long enough to cause a visible hitch.
+struct IOSSlowReadTimer
+{
+    const FileHandle* file;
+    uint32_t size;
+    std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
+
+    static bool Enabled()
+    {
+        static const bool enabled = [] {
+            const char* value = std::getenv("UNLEASHED_IOS_FRAME_DIAGNOSTICS");
+            return value != nullptr && value[0] == '1';
+        }();
+        return enabled;
+    }
+
+    ~IOSSlowReadTimer();
+};
+#endif
 
 struct FileHandle : KernelObject
 {
     std::fstream stream;
     std::filesystem::path path;
 };
+
+#if defined(UNLEASHED_RECOMP_IOS)
+IOSSlowReadTimer::~IOSSlowReadTimer()
+{
+    const double elapsed = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+    if (elapsed > 8.0)
+        LOGFN("iOS slow file read: {:.1f} ms, {} bytes, {}", elapsed, size, (const char*)file->path.filename().u8string().c_str());
+}
+#endif
 
 struct FindHandle : KernelObject
 {
@@ -71,8 +104,8 @@ struct FindHandle : KernelObject
             lpFindFileData->dwFileAttributes = ByteSwap(FILE_ATTRIBUTE_NORMAL);
 
         strncpy(lpFindFileData->cFileName, (const char *)(iterator->first.c_str()), sizeof(lpFindFileData->cFileName));
-        lpFindFileData->nFileSizeLow = ByteSwap(uint32_t(iterator->second.first >> 32U));
-        lpFindFileData->nFileSizeHigh = ByteSwap(uint32_t(iterator->second.first));
+        lpFindFileData->nFileSizeLow = ByteSwap(uint32_t(iterator->second.first));
+        lpFindFileData->nFileSizeHigh = ByteSwap(uint32_t(iterator->second.first >> 32U));
         lpFindFileData->ftCreationTime = {};
         lpFindFileData->ftLastAccessTime = {};
         lpFindFileData->ftLastWriteTime = {};
@@ -170,14 +203,21 @@ uint32_t XReadFile
         std::streamoff streamOffset = lpOverlapped->Offset + (std::streamoff(lpOverlapped->OffsetHigh.get()) << 32U);
         hFile->stream.clear();
         hFile->stream.seekg(streamOffset, std::ios::beg);
-        if (hFile->stream.bad())
+        if (hFile->stream.fail())
         {
             return FALSE;
         }
     }
 
     uint32_t numberOfBytesRead;
-    hFile->stream.read((char *)(lpBuffer), nNumberOfBytesToRead);
+    {
+#if defined(UNLEASHED_RECOMP_IOS)
+        std::optional<IOSSlowReadTimer> timer;
+        if (IOSSlowReadTimer::Enabled())
+            timer.emplace(IOSSlowReadTimer{ hFile, nNumberOfBytesToRead });
+#endif
+        hFile->stream.read((char *)(lpBuffer), nNumberOfBytesToRead);
+    }
     if (!hFile->stream.bad())
     {
         numberOfBytesRead = uint32_t(hFile->stream.gcount());
@@ -203,7 +243,9 @@ uint32_t XReadFile
 uint32_t XSetFilePointer(FileHandle* hFile, int32_t lDistanceToMove, be<int32_t>* lpDistanceToMoveHigh, uint32_t dwMoveMethod)
 {
     int32_t distanceToMoveHigh = lpDistanceToMoveHigh ? lpDistanceToMoveHigh->get() : 0;
-    std::streamoff streamOffset = lDistanceToMove + (std::streamoff(distanceToMoveHigh) << 32U);
+    const std::streamoff streamOffset = lpDistanceToMoveHigh
+        ? std::bit_cast<int64_t>((uint64_t(uint32_t(distanceToMoveHigh)) << 32U) | uint32_t(lDistanceToMove))
+        : lDistanceToMove;
     std::fstream::seekdir streamSeekDir = {};
     switch (dwMoveMethod)
     {
@@ -223,7 +265,7 @@ uint32_t XSetFilePointer(FileHandle* hFile, int32_t lDistanceToMove, be<int32_t>
 
     hFile->stream.clear();
     hFile->stream.seekg(streamOffset, streamSeekDir);
-    if (hFile->stream.bad())
+    if (hFile->stream.fail())
     {
         return INVALID_SET_FILE_POINTER;
     }
@@ -256,7 +298,7 @@ uint32_t XSetFilePointerEx(FileHandle* hFile, int32_t lDistanceToMove, LARGE_INT
 
     hFile->stream.clear();
     hFile->stream.seekg(lDistanceToMove, streamSeekDir);
-    if (hFile->stream.bad())
+    if (hFile->stream.fail())
     {
         return FALSE;
     }
@@ -317,10 +359,17 @@ uint32_t XReadFileEx(FileHandle* hFile, void* lpBuffer, uint32_t nNumberOfBytesT
     std::streamoff streamOffset = lpOverlapped->Offset + (std::streamoff(lpOverlapped->OffsetHigh.get()) << 32U);
     hFile->stream.clear();
     hFile->stream.seekg(streamOffset, std::ios::beg);
-    if (hFile->stream.bad())
+    if (hFile->stream.fail())
         return FALSE;
 
-    hFile->stream.read((char *)(lpBuffer), nNumberOfBytesToRead);
+    {
+#if defined(UNLEASHED_RECOMP_IOS)
+        std::optional<IOSSlowReadTimer> timer;
+        if (IOSSlowReadTimer::Enabled())
+            timer.emplace(IOSSlowReadTimer{ hFile, nNumberOfBytesToRead });
+#endif
+        hFile->stream.read((char *)(lpBuffer), nNumberOfBytesToRead);
+    }
     if (!hFile->stream.bad())
     {
         numberOfBytesRead = uint32_t(hFile->stream.gcount());
@@ -352,11 +401,11 @@ uint32_t XWriteFile(FileHandle* hFile, const void* lpBuffer, uint32_t nNumberOfB
     assert(lpOverlapped == nullptr && "Overlapped not implemented.");
 
     hFile->stream.write((const char *)(lpBuffer), nNumberOfBytesToWrite);
-    if (hFile->stream.bad())
+    if (hFile->stream.fail())
         return FALSE;
 
     if (lpNumberOfBytesWritten != nullptr)
-        *lpNumberOfBytesWritten = uint32_t(hFile->stream.gcount());
+        *lpNumberOfBytesWritten = nNumberOfBytesToWrite;
 
     return TRUE;
 }

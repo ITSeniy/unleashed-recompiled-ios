@@ -13,6 +13,7 @@
 
 #include <filesystem>
 #include <map>
+#include <tuple>
 
 #include "virtual_file_system.h"
 
@@ -21,11 +22,14 @@
 struct ISOFileSystem : VirtualFileSystem
 {
     MemoryMappedFile mappedFile;
+    std::filesystem::path sourcePath;
+    size_t sourceSize = 0;
     std::map<std::string, std::tuple<size_t, size_t>> fileMap;
     std::string name;
 
     ISOFileSystem(const std::filesystem::path &isoPath);
     bool load(const std::string &path, uint8_t *fileData, size_t fileDataMaxByteCount) const override;
+    bool stream(const std::string& path, const ChunkSink& sink) const override;
     size_t getSize(const std::string &path) const override;
     bool exists(const std::string &path) const override;
     const std::string &getName() const override;

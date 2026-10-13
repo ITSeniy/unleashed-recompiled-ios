@@ -47,6 +47,15 @@ android {
         }
     }
     buildTypes {
+        debug {
+            // Opt-in side-by-side install next to a release build signed with
+            // another key, e.g. -PappIdSuffix=.unified. The test build then has
+            // its own data directory and its own game files.
+            if (project.hasProperty('appIdSuffix')) {
+                applicationIdSuffix project.property('appIdSuffix')
+                resValue "string", "app_name", "UnleashedRecomp" + project.property('appIdSuffix')
+            }
+        }
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'

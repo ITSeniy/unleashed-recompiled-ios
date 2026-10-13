@@ -12,6 +12,9 @@ CONFIG_DEFINE("System", bool, ShowConsole, false);
 
 CONFIG_DEFINE_ENUM_LOCALISED("Input", ECameraRotationMode, HorizontalCamera, ECameraRotationMode::Normal);
 CONFIG_DEFINE_ENUM_LOCALISED("Input", ECameraRotationMode, VerticalCamera, ECameraRotationMode::Normal);
+#if defined(UNLEASHED_RECOMP_IOS)
+CONFIG_DEFINE_LOCALISED("Input", float, TouchCameraSensitivity, 1.0f);
+#endif
 CONFIG_DEFINE_LOCALISED("Input", bool, Vibration, true);
 CONFIG_DEFINE_LOCALISED("Input", bool, AllowBackgroundInput, false);
 #ifdef __ANDROID__
@@ -68,33 +71,54 @@ CONFIG_DEFINE("Video", int32_t, WindowHeight, 720);
 CONFIG_DEFINE_ENUM("Video", EWindowState, WindowState, EWindowState::Normal);
 CONFIG_DEFINE_LOCALISED("Video", int32_t, Monitor, 0);
 CONFIG_DEFINE_ENUM_LOCALISED("Video", EAspectRatio, AspectRatio, EAspectRatio::Auto);
+#ifdef __ANDROID__
 // Android: the Adreno-class mobile GPUs this port targets sit at ~40 ms/frame at native
 // resolution; 50% scale + no MSAA is the measured sweet spot for playable framerates.
-#ifdef __ANDROID__
 CONFIG_DEFINE_LOCALISED("Video", float, ResolutionScale, 0.5f);
+#elif defined(UNLEASHED_RECOMP_IOS)
+// With MetalFX Spatial and both resolve optimizations, 0.75 held 59-60 FPS for six
+// minutes on A16 but at the edge of the sustained GPU budget; 0.66 keeps headroom.
+CONFIG_DEFINE_LOCALISED("Video", float, ResolutionScale, 0.66f);
+CONFIG_DEFINE_LOCALISED("Video", bool, MetalFXUpscaling, true);
+// Resolve-copy optimizations; each can be turned off if it causes artifacts.
+CONFIG_DEFINE_LOCALISED("Video", bool, SkipUnusedCopies, true);
+CONFIG_DEFINE_LOCALISED("Video", bool, ReuseRenderTargets, true);
 #else
 CONFIG_DEFINE_LOCALISED("Video", float, ResolutionScale, 1.0f);
 #endif
 CONFIG_DEFINE_LOCALISED("Video", bool, Fullscreen, true);
 CONFIG_DEFINE_LOCALISED("Video", bool, VSync, true);
 CONFIG_DEFINE_ENUM("Video", ETripleBuffering, TripleBuffering, ETripleBuffering::Auto);
+#if defined(UNLEASHED_RECOMP_IOS)
+CONFIG_DEFINE_LOCALISED("Video", int32_t, FPS, 30);
+#else
 CONFIG_DEFINE_LOCALISED("Video", int32_t, FPS, 60);
+#endif
 CONFIG_DEFINE_LOCALISED("Video", bool, ShowFPS, false);
-// Android: initial visibility of the profiler overlay (no F1 key there; toggled from
+// Mobile: initial visibility of the profiler overlay (no F1 key there; toggled from
 // the in-game Video menu, and closing the overlay in-game persists as off). Desktop uses F1.
 CONFIG_DEFINE_LOCALISED("Video", bool, ShowProfiler, false);
+CONFIG_DEFINE("Video", bool, MetalHUD, false);
 CONFIG_DEFINE("Video", uint32_t, MaxFrameLatency, 2);
 CONFIG_DEFINE_LOCALISED("Video", float, Brightness, 0.5f);
 #ifdef __ANDROID__
 CONFIG_DEFINE_ENUM_LOCALISED("Video", EAntiAliasing, AntiAliasing, EAntiAliasing::None);
 CONFIG_DEFINE_LOCALISED("Video", bool, TransparencyAntiAliasing, false);
 CONFIG_DEFINE("Video", uint32_t, AnisotropicFiltering, 4);
+#elif defined(UNLEASHED_RECOMP_IOS)
+CONFIG_DEFINE_ENUM_LOCALISED("Video", EAntiAliasing, AntiAliasing, EAntiAliasing::None);
+CONFIG_DEFINE_LOCALISED("Video", bool, TransparencyAntiAliasing, true);
+CONFIG_DEFINE("Video", uint32_t, AnisotropicFiltering, 16);
 #else
 CONFIG_DEFINE_ENUM_LOCALISED("Video", EAntiAliasing, AntiAliasing, EAntiAliasing::MSAA4x);
 CONFIG_DEFINE_LOCALISED("Video", bool, TransparencyAntiAliasing, true);
 CONFIG_DEFINE("Video", uint32_t, AnisotropicFiltering, 16);
 #endif
+#if defined(UNLEASHED_RECOMP_IOS)
+CONFIG_DEFINE_ENUM_LOCALISED("Video", EShadowResolution, ShadowResolution, EShadowResolution::x1024);
+#else
 CONFIG_DEFINE_ENUM_LOCALISED("Video", EShadowResolution, ShadowResolution, EShadowResolution::x4096);
+#endif
 CONFIG_DEFINE_ENUM_LOCALISED("Video", ETextureQuality, TextureQuality, ETextureQuality::Full);
 CONFIG_DEFINE_LOCALISED("Video", bool, PlanarReflections, true);
 CONFIG_DEFINE_ENUM_LOCALISED("Video", EGITextureFiltering, GITextureFiltering, EGITextureFiltering::Bicubic);

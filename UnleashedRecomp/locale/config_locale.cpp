@@ -302,6 +302,19 @@ CONFIG_DEFINE_LOCALE(VerticalCamera)
     { ELanguage::Italian,  { "Telecamera verticale", "Modifica come la telecamera si muove su e giù." } }
 };
 
+#if defined(UNLEASHED_RECOMP_IOS)
+// Japanese Notes: This localization should include furigana.
+CONFIG_DEFINE_LOCALE(TouchCameraSensitivity)
+{
+    { ELanguage::English,  { "Touch Camera Sensitivity", "Adjust the camera speed when dragging the touch screen." } },
+    { ELanguage::Japanese, { "タッチカメラの[感度:かんど]", "[画面:がめん]をドラッグしたときの\u200Bカメラの[速度:そくど]を\u200B[調整:ちょうせい]できます" } },
+    { ELanguage::German,   { "Touch-Kameraempfindlichkeit", "Passe die Kamerageschwindigkeit beim Ziehen auf dem Touchscreen an." } },
+    { ELanguage::French,   { "Sensibilité de la caméra tactile", "Ajuste la vitesse de la caméra en faisant glisser le doigt sur l'écran tactile." } },
+    { ELanguage::Spanish,  { "Sensibilidad de la cámara táctil", "Ajusta la velocidad de la cámara al arrastrar el dedo por la pantalla táctil." } },
+    { ELanguage::Italian,  { "Sensibilità della telecamera touch", "Regola la velocità della telecamera trascinando il dito sullo schermo." } }
+};
+#endif
+
 CONFIG_DEFINE_ENUM_LOCALE(ECameraRotationMode)
 {
     {
@@ -671,6 +684,35 @@ CONFIG_DEFINE_LOCALE(ResolutionScale)
     { ELanguage::Spanish,  { "Escala de resolución", "Ajusta la resolución interna del juego.\n\n%dx%d" } },
     { ELanguage::Italian, { "Scala risoluzione", "Regola la risoluzione interna del gioco.\n\n%dx%d" } }
 };
+
+#if defined(UNLEASHED_RECOMP_IOS)
+CONFIG_DEFINE_LOCALE(MetalFXUpscaling)
+{
+    { ELanguage::English,  { "MetalFX Upscaling", "Upscale the internal resolution to the screen with Apple MetalFX for a sharper image.\n\nOnly applies when Resolution Scale is below 100%." } },
+    { ELanguage::German,   { "MetalFX-Hochskalierung", "Skaliert die interne Auflösung mit Apple MetalFX auf den Bildschirm hoch, um ein schärferes Bild zu erhalten.\n\nWirkt nur, wenn die Rendering-Auflösung unter 100 % liegt." } },
+    { ELanguage::French,   { "Mise à l'échelle MetalFX", "Agrandit la résolution interne à celle de l'écran avec Apple MetalFX pour une image plus nette.\n\nNe s'applique que si l'échelle de rendu est inférieure à 100 %." } },
+    { ELanguage::Spanish,  { "Escalado MetalFX", "Escala la resolución interna a la de la pantalla con Apple MetalFX para una imagen más nítida.\n\nSolo se aplica si la escala de resolución es inferior al 100 %." } },
+    { ELanguage::Italian,  { "Upscaling MetalFX", "Scala la risoluzione interna a quella dello schermo con Apple MetalFX per un'immagine più nitida.\n\nSi applica solo se la scala risoluzione è inferiore al 100%." } }
+};
+
+CONFIG_DEFINE_LOCALE(SkipUnusedCopies)
+{
+    { ELanguage::English,  { "Skip Unused Copies", "Skip end-of-frame copies of render targets that the game never reads, improving performance.\n\nTurn off if you notice flickering or stale image areas." } },
+    { ELanguage::German,   { "Unbenutzte Kopien überspringen", "Überspringt Kopien von Renderzielen am Bildende, die das Spiel nie liest, und verbessert so die Leistung.\n\nDeaktivieren, falls Flackern oder veraltete Bildbereiche auftreten." } },
+    { ELanguage::French,   { "Ignorer les copies inutilisées", "Ignore les copies de cibles de rendu en fin d'image que le jeu ne lit jamais, ce qui améliore les performances.\n\nDésactivez en cas de scintillement ou de zones d'image figées." } },
+    { ELanguage::Spanish,  { "Omitir copias sin usar", "Omite las copias de destinos de renderizado al final del fotograma que el juego nunca lee, mejorando el rendimiento.\n\nDesactívalo si notas parpadeos o zonas de imagen desactualizadas." } },
+    { ELanguage::Italian,  { "Salta copie inutilizzate", "Salta le copie dei target di rendering a fine fotogramma che il gioco non legge mai, migliorando le prestazioni.\n\nDisattiva se noti sfarfallio o aree dell'immagine non aggiornate." } }
+};
+
+CONFIG_DEFINE_LOCALE(ReuseRenderTargets)
+{
+    { ELanguage::English,  { "Reuse Render Targets", "Exchange render target memory instead of copying it before full-screen effects, improving performance.\n\nTurn off if you notice corrupted post-processing effects." } },
+    { ELanguage::German,   { "Renderziele wiederverwenden", "Tauscht den Speicher von Renderzielen vor Vollbildeffekten aus, statt ihn zu kopieren, und verbessert so die Leistung.\n\nDeaktivieren, falls Nachbearbeitungseffekte fehlerhaft aussehen." } },
+    { ELanguage::French,   { "Réutiliser les cibles de rendu", "Échange la mémoire des cibles de rendu au lieu de la copier avant les effets plein écran, ce qui améliore les performances.\n\nDésactivez si les effets de post-traitement sont corrompus." } },
+    { ELanguage::Spanish,  { "Reutilizar destinos de renderizado", "Intercambia la memoria de los destinos de renderizado en lugar de copiarla antes de los efectos a pantalla completa, mejorando el rendimiento.\n\nDesactívalo si ves efectos de posprocesado corruptos." } },
+    { ELanguage::Italian,  { "Riutilizza target di rendering", "Scambia la memoria dei target di rendering invece di copiarla prima degli effetti a schermo intero, migliorando le prestazioni.\n\nDisattiva se noti effetti di post-elaborazione corrotti." } }
+};
+#endif
 
 // Japanese Notes: This localization should include furigana.
 CONFIG_DEFINE_LOCALE(Fullscreen)

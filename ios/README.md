@@ -1,9 +1,9 @@
 # Experimental iPhone build
 
-This builds an isolated prototype from the Metal/UIKit-capable
-[iOS fork](https://github.com/Loganbogan9/UnleashedRecompiOS/tree/5b2348e0c556a35143f473c4277b89d526675a95)
-and this Android checkout's BC texture converter. It is not yet a unified iOS
-target in the Android project's root CMake configuration.
+iOS is built from this repository's game sources, the same ones the Android
+build uses, through the root CMake configuration. The Metal/UIKit groundwork
+was merged in from the
+[iOS fork](https://github.com/Loganbogan9/UnleashedRecompiOS/tree/5b2348e0c556a35143f473c4277b89d526675a95).
 
 On 2026-10-11 the signed Release prototype launched on a physical iPhone 15
 without a debugger. The user confirmed that the first level loads and Sonic
@@ -11,15 +11,22 @@ can be controlled. SE 3, sustained frame rate and level-load memory peaks have
 not been tested. Detailed launch evidence is in
 [IOS_PORTING.md](../docs/IOS_PORTING.md).
 
-`prepare.py` pins and checks the platform source archives, reuses vendored
-dependencies from this checkout, and applies the patches under `ios/patches`.
-All generated code, downloaded sources and build outputs live under `out/ios`.
-The original Android source/dependency trees are not edited.
+Only three dependencies differ from Android: iOS pins its own plume (Metal
+backend), SDL and XenosRecomp (AIR shader cache, `shaderMain` entry points).
+`prepare.py` downloads and checks them, together with FreeType and curl, into
+`out/ios/deps`; their submodules link to the vendored copies. CMake applies
+`patches/dependencies/plume-*.patch` to a copy of plume and
+`xenos-air-target.patch` to a copy of XenosRecomp. In game code, the two
+XenosRecomp versions are told apart by `UNLEASHED_RECOMP_XENOS_METAL`.
+
+`generate.py` writes guest code, SPIR-V headers and resources to their usual
+ignored locations (the Android build produces the same files) and the iOS
+shader cache to `out/ios/generated`, because its layout differs from the one
+in `UnleashedRecompLib/shader`.
 
 The native Metal backend selects BC when supported, otherwise transcodes BC1–5
 and BC7 to ETC2/EAC, preserving mip levels, arrays, cube faces and sRGB. The
-converter comes from `UnleashedRecomp/gpu/video.cpp`; the integration copy is
-`gpu/bc_texture_upload.inc`. Keep changes to the shared algorithm in sync.
+converter in `UnleashedRecomp/gpu/video.cpp` is shared with Android.
 BC6H remains unsupported on devices without BC. Signed BC4/5 currently use the
 Android converter's biased UNORM fallback. ETC2 conversion is lossy and its
 load-time CPU cost still needs profiling. No persistent conversion cache is used.
@@ -168,12 +175,11 @@ From the repository root, substitute your own `TEAM_ID` and unique bundle ID:
 
 ```sh
 python3 ios/prepare.py
-cmake -S ios/host -B out/ios/host -G Ninja \
-  -DIOS_SOURCE_ROOT="$PWD/out/ios/source" -DCMAKE_BUILD_TYPE=Release \
+cmake -S ios/host -B out/ios/host -G Ninja -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_POLICY_VERSION_MINIMUM=3.5
 cmake --build out/ios/host --parallel 6
 python3 ios/generate.py
-cmake -S out/ios/source -B out/ios/build -G Xcode \
+cmake -S . -B out/ios/build -G Xcode \
   -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_SYSROOT=iphoneos \
   -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=16.4 \
   -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=OFF \
@@ -184,10 +190,10 @@ cmake --build out/ios/build --config Release --target UnleashedRecomp -- \
   -allowProvisioningUpdates -jobs 6
 ```
 
-`prepare.py` refuses to overwrite an existing prepared source tree. For another
-experiment use `--output out/ios-next` for both Python scripts and adjust CMake
-paths. The native generator configuration embeds the prepared source path, so
-its host build must be configured for that same source tree.
+`prepare.py` refuses to overwrite existing `out/ios/deps`; delete it to download
+again. The host tools have the repository and `out/ios` paths compiled in, so
+`generate.py` runs them without arguments. Rerun `generate.py` after changing
+the game files or `UnleashedRecompLib/config`.
 
 ## Device data
 

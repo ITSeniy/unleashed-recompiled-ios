@@ -1,12 +1,19 @@
 #include "video.h"
+#define BCDEC_IMPLEMENTATION
+#include <bcdec.h>
+#include <ProcessRGB.hpp>
+#include "dds_header.h"
+#include "dds_upload.h"
+#include "os/macos/ios_diagnostics.h"
+#if defined(UNLEASHED_RECOMP_IOS)
+#include <ui/ios_event_loop.h>
+#endif
+
+#include <climits>
 
 #include "imgui/imgui_common.h"
 #include "imgui/imgui_snapshot.h"
 #include "imgui/imgui_font_builder.h"
-
-#define BCDEC_IMPLEMENTATION
-#include <bcdec.h>
-#include <ProcessRGB.hpp>
 
 #include <app.h>
 #include <bc_diff.h>
@@ -21,6 +28,14 @@
 #include <res/font/im_font_atlas.dds.h>
 #include <shader/shader_cache.h>
 #include <SWA.h>
+
+// Entry point of the guest shaders in the cache. The vendored XenosRecomp still
+// emits "main"; the iOS one (Metal support) emits "shaderMain".
+#ifdef UNLEASHED_RECOMP_XENOS_METAL
+#define GUEST_SHADER_ENTRY "shaderMain"
+#else
+#define GUEST_SHADER_ENTRY "main"
+#endif
 #include <ui/achievement_menu.h>
 #include <ui/achievement_overlay.h>
 #include <ui/button_guide.h>
@@ -36,8 +51,15 @@
 #include <ui/touch_controls.h>
 #include <patches/aspect_ratio_patches.h>
 #include <user/config.h>
+#include <user/paths.h>
 #include <sdl_listener.h>
 #include <xxHashMap.h>
+
+#if defined(__APPLE__)
+#include <dispatch/dispatch.h>
+#endif
+#include <os/logger.h>
+#include <os/app_lifecycle.h>
 #include <os/process.h>
 #include <os/logger.h>
 #if defined(__ANDROID__)
@@ -45,6 +67,19 @@
 #include <os/android/vulkan_driver_android.h>
 #include <android/native_window.h>
 #include <dlfcn.h>
+#endif
+#ifdef UNLEASHED_RECOMP_METAL
+#include <plume_metal_diagnostics.h>
+#if defined(UNLEASHED_RECOMP_IOS)
+#include <plume_metal_upscaling.h>
+#endif
+#endif
+
+#include <cstdlib>
+
+#if defined(__APPLE__)
+#include <TargetConditionals.h>
+#include <mach/mach.h>
 #endif
 
 #if defined(ASYNC_PSO_DEBUG) || defined(PSO_CACHING)
@@ -55,54 +90,80 @@
 #include "../../tools/XenosRecomp/XenosRecomp/shader_common.h"
 
 #ifdef UNLEASHED_RECOMP_D3D12
-#include "shader/blend_color_alpha_ps.hlsl.dxil.h"
-#include "shader/copy_vs.hlsl.dxil.h"
-#include "shader/copy_color_ps.hlsl.dxil.h"
-#include "shader/copy_depth_ps.hlsl.dxil.h"
-#include "shader/csd_filter_ps.hlsl.dxil.h"
-#include "shader/csd_no_tex_vs.hlsl.dxil.h"
-#include "shader/csd_vs.hlsl.dxil.h"
-#include "shader/enhanced_motion_blur_ps.hlsl.dxil.h"
-#include "shader/gamma_correction_ps.hlsl.dxil.h"
-#include "shader/gaussian_blur_3x3.hlsl.dxil.h"
-#include "shader/gaussian_blur_5x5.hlsl.dxil.h"
-#include "shader/gaussian_blur_7x7.hlsl.dxil.h"
-#include "shader/gaussian_blur_9x9.hlsl.dxil.h"
-#include "shader/imgui_ps.hlsl.dxil.h"
-#include "shader/imgui_vs.hlsl.dxil.h"
-#include "shader/movie_ps.hlsl.dxil.h"
-#include "shader/movie_vs.hlsl.dxil.h"
-#include "shader/resolve_msaa_color_2x.hlsl.dxil.h"
-#include "shader/resolve_msaa_color_4x.hlsl.dxil.h"
-#include "shader/resolve_msaa_color_8x.hlsl.dxil.h"
-#include "shader/resolve_msaa_depth_2x.hlsl.dxil.h"
-#include "shader/resolve_msaa_depth_4x.hlsl.dxil.h"
-#include "shader/resolve_msaa_depth_8x.hlsl.dxil.h"
+#include "shader/hlsl/blend_color_alpha_ps.hlsl.dxil.h"
+#include "shader/hlsl/copy_vs.hlsl.dxil.h"
+#include "shader/hlsl/copy_color_ps.hlsl.dxil.h"
+#include "shader/hlsl/copy_depth_ps.hlsl.dxil.h"
+#include "shader/hlsl/csd_filter_ps.hlsl.dxil.h"
+#include "shader/hlsl/csd_no_tex_vs.hlsl.dxil.h"
+#include "shader/hlsl/csd_vs.hlsl.dxil.h"
+#include "shader/hlsl/enhanced_motion_blur_ps.hlsl.dxil.h"
+#include "shader/hlsl/gamma_correction_ps.hlsl.dxil.h"
+#include "shader/hlsl/gaussian_blur_3x3.hlsl.dxil.h"
+#include "shader/hlsl/gaussian_blur_5x5.hlsl.dxil.h"
+#include "shader/hlsl/gaussian_blur_7x7.hlsl.dxil.h"
+#include "shader/hlsl/gaussian_blur_9x9.hlsl.dxil.h"
+#include "shader/hlsl/imgui_ps.hlsl.dxil.h"
+#include "shader/hlsl/imgui_vs.hlsl.dxil.h"
+#include "shader/hlsl/movie_ps.hlsl.dxil.h"
+#include "shader/hlsl/movie_vs.hlsl.dxil.h"
+#include "shader/hlsl/resolve_msaa_color_2x.hlsl.dxil.h"
+#include "shader/hlsl/resolve_msaa_color_4x.hlsl.dxil.h"
+#include "shader/hlsl/resolve_msaa_color_8x.hlsl.dxil.h"
+#include "shader/hlsl/resolve_msaa_depth_2x.hlsl.dxil.h"
+#include "shader/hlsl/resolve_msaa_depth_4x.hlsl.dxil.h"
+#include "shader/hlsl/resolve_msaa_depth_8x.hlsl.dxil.h"
 #endif
 
-#include "shader/blend_color_alpha_ps.hlsl.spirv.h"
-#include "shader/copy_vs.hlsl.spirv.h"
-#include "shader/copy_color_ps.hlsl.spirv.h"
-#include "shader/copy_depth_ps.hlsl.spirv.h"
-#include "shader/csd_filter_ps.hlsl.spirv.h"
-#include "shader/csd_no_tex_vs.hlsl.spirv.h"
-#include "shader/csd_vs.hlsl.spirv.h"
-#include "shader/enhanced_motion_blur_ps.hlsl.spirv.h"
-#include "shader/gamma_correction_ps.hlsl.spirv.h"
-#include "shader/gaussian_blur_3x3.hlsl.spirv.h"
-#include "shader/gaussian_blur_5x5.hlsl.spirv.h"
-#include "shader/gaussian_blur_7x7.hlsl.spirv.h"
-#include "shader/gaussian_blur_9x9.hlsl.spirv.h"
-#include "shader/imgui_ps.hlsl.spirv.h"
-#include "shader/imgui_vs.hlsl.spirv.h"
-#include "shader/movie_ps.hlsl.spirv.h"
-#include "shader/movie_vs.hlsl.spirv.h"
-#include "shader/resolve_msaa_color_2x.hlsl.spirv.h"
-#include "shader/resolve_msaa_color_4x.hlsl.spirv.h"
-#include "shader/resolve_msaa_color_8x.hlsl.spirv.h"
-#include "shader/resolve_msaa_depth_2x.hlsl.spirv.h"
-#include "shader/resolve_msaa_depth_4x.hlsl.spirv.h"
-#include "shader/resolve_msaa_depth_8x.hlsl.spirv.h"
+#ifdef UNLEASHED_RECOMP_METAL
+#include <gpu/shader/msl/blend_color_alpha_ps.metal.metallib.h>
+#include <gpu/shader/msl/copy_vs.metal.metallib.h>
+#include <gpu/shader/msl/copy_color_ps.metal.metallib.h>
+#include <gpu/shader/msl/copy_depth_ps.metal.metallib.h>
+#include <gpu/shader/msl/csd_filter_ps.metal.metallib.h>
+#include <gpu/shader/msl/csd_no_tex_vs.metal.metallib.h>
+#include <gpu/shader/msl/csd_vs.metal.metallib.h>
+#include <gpu/shader/msl/enhanced_motion_blur_ps.metal.metallib.h>
+#include <gpu/shader/msl/gamma_correction_ps.metal.metallib.h>
+#include <gpu/shader/msl/gaussian_blur_3x3.metal.metallib.h>
+#include <gpu/shader/msl/gaussian_blur_5x5.metal.metallib.h>
+#include <gpu/shader/msl/gaussian_blur_7x7.metal.metallib.h>
+#include <gpu/shader/msl/gaussian_blur_9x9.metal.metallib.h>
+#include <gpu/shader/msl/imgui_ps.metal.metallib.h>
+#include <gpu/shader/msl/imgui_vs.metal.metallib.h>
+#include <gpu/shader/msl/movie_ps.metal.metallib.h>
+#include <gpu/shader/msl/movie_vs.metal.metallib.h>
+#include <gpu/shader/msl/resolve_msaa_color_2x.metal.metallib.h>
+#include <gpu/shader/msl/resolve_msaa_color_4x.metal.metallib.h>
+#include <gpu/shader/msl/resolve_msaa_color_8x.metal.metallib.h>
+#include <gpu/shader/msl/resolve_msaa_depth_2x.metal.metallib.h>
+#include <gpu/shader/msl/resolve_msaa_depth_4x.metal.metallib.h>
+#include <gpu/shader/msl/resolve_msaa_depth_8x.metal.metallib.h>
+#endif
+
+#include "shader/hlsl/blend_color_alpha_ps.hlsl.spirv.h"
+#include "shader/hlsl/copy_vs.hlsl.spirv.h"
+#include "shader/hlsl/copy_color_ps.hlsl.spirv.h"
+#include "shader/hlsl/copy_depth_ps.hlsl.spirv.h"
+#include "shader/hlsl/csd_filter_ps.hlsl.spirv.h"
+#include "shader/hlsl/csd_no_tex_vs.hlsl.spirv.h"
+#include "shader/hlsl/csd_vs.hlsl.spirv.h"
+#include "shader/hlsl/enhanced_motion_blur_ps.hlsl.spirv.h"
+#include "shader/hlsl/gamma_correction_ps.hlsl.spirv.h"
+#include "shader/hlsl/gaussian_blur_3x3.hlsl.spirv.h"
+#include "shader/hlsl/gaussian_blur_5x5.hlsl.spirv.h"
+#include "shader/hlsl/gaussian_blur_7x7.hlsl.spirv.h"
+#include "shader/hlsl/gaussian_blur_9x9.hlsl.spirv.h"
+#include "shader/hlsl/imgui_ps.hlsl.spirv.h"
+#include "shader/hlsl/imgui_vs.hlsl.spirv.h"
+#include "shader/hlsl/movie_ps.hlsl.spirv.h"
+#include "shader/hlsl/movie_vs.hlsl.spirv.h"
+#include "shader/hlsl/resolve_msaa_color_2x.hlsl.spirv.h"
+#include "shader/hlsl/resolve_msaa_color_4x.hlsl.spirv.h"
+#include "shader/hlsl/resolve_msaa_color_8x.hlsl.spirv.h"
+#include "shader/hlsl/resolve_msaa_depth_2x.hlsl.spirv.h"
+#include "shader/hlsl/resolve_msaa_depth_4x.hlsl.spirv.h"
+#include "shader/hlsl/resolve_msaa_depth_8x.hlsl.spirv.h"
 
 #ifdef _WIN32
 extern "C"
@@ -116,6 +177,9 @@ namespace plume
 {
 #ifdef UNLEASHED_RECOMP_D3D12
     extern std::unique_ptr<RenderInterface> CreateD3D12Interface();
+#endif
+#ifdef UNLEASHED_RECOMP_METAL
+    extern std::unique_ptr<RenderInterface> CreateMetalInterface();
 #endif
 #ifdef SDL_VULKAN_ENABLED
     extern std::unique_ptr<RenderInterface> CreateVulkanInterface(RenderWindow sdlWindow);
@@ -183,6 +247,11 @@ struct SharedConstants
     float halfPixelOffsetY{};
     float alphaThreshold{};
 };
+
+static_assert(offsetof(SharedConstants, texture2DIndices) == 0);
+static_assert(offsetof(SharedConstants, samplerIndices) == 192);
+static_assert(offsetof(SharedConstants, booleans) == 256);
+static_assert(offsetof(SharedConstants, alphaThreshold) == 272);
 
 // Depth bias values here are only used when the render device has 
 // dynamic depth bias capability enabled. Otherwise, they get unused
@@ -296,14 +365,21 @@ static Profiler g_swapChainAcquireProfiler;
 
 // Command stream counters defined in plume_vulkan.cpp (always compiled in);
 // zero when the D3D12 backend is active. Snapshotted at end of frame recording.
+// The iOS plume pin has no counters, so they are defined here and stay zero.
+#if defined(UNLEASHED_RECOMP_IOS)
+#define PLUME_COUNTER
+#else
+#define PLUME_COUNTER extern
+#endif
 extern "C" {
-    extern uint32_t g_plumeDrawCalls;
-    extern uint32_t g_plumeRenderPassBegins;
-    extern uint32_t g_plumePipelineBinds;
-    extern uint32_t g_plumeBarrierCalls;
-    extern uint32_t g_plumeFramebufferSets;
-    extern std::atomic<bool> g_plumeDeviceLost;
+    PLUME_COUNTER uint32_t g_plumeDrawCalls;
+    PLUME_COUNTER uint32_t g_plumeRenderPassBegins;
+    PLUME_COUNTER uint32_t g_plumePipelineBinds;
+    PLUME_COUNTER uint32_t g_plumeBarrierCalls;
+    PLUME_COUNTER uint32_t g_plumeFramebufferSets;
+    PLUME_COUNTER std::atomic<bool> g_plumeDeviceLost;
 }
+#undef PLUME_COUNTER
 
 static uint32_t g_statDrawCalls;
 static uint32_t g_statRenderPassBegins;
@@ -317,16 +393,13 @@ static uint32_t g_statFramebufferSets;
 static bool g_profilerVisible;
 static bool g_profilerWasToggled;
 
-#ifdef UNLEASHED_RECOMP_D3D12
-static bool g_vulkan = false;
+#if !defined(UNLEASHED_RECOMP_D3D12) && !defined(UNLEASHED_RECOMP_METAL)
+static constexpr Backend g_backend = Backend::VULKAN;
 #else
-static constexpr bool g_vulkan = true;
+static Backend g_backend;
 #endif
 
 static bool g_triangleStripWorkaround = false;
-
-static bool g_hardwareResolve = true;
-static bool g_hardwareDepthResolve = true;
 
 static std::unique_ptr<RenderInterface> g_interface;
 static std::unique_ptr<RenderDevice> g_device;
@@ -379,6 +452,45 @@ static uint32_t g_intermediaryBackBufferTextureWidth;
 static uint32_t g_intermediaryBackBufferTextureHeight;
 static uint32_t g_intermediaryBackBufferTextureDescriptorIndex;
 
+#if defined(UNLEASHED_RECOMP_IOS)
+static std::unique_ptr<RenderTexture> g_iosMetalFXOutput;
+static uint32_t g_iosMetalFXOutputWidth, g_iosMetalFXOutputHeight, g_iosMetalFXOutputDescriptor;
+static bool g_iosMetalFXActive, g_iosMetalFXScaled;
+static bool g_iosTemporalActive, g_iosTemporalInputsReady, g_iosPreviousTemporalFrame;
+static bool g_iosMotionBlurDraw, g_iosObjectVelocityDraw;
+static GuestSurface* g_iosTemporalSceneDepth;
+static GuestShader* g_iosCsdVertexShader;
+static GuestShader* g_iosCsdNoTexVertexShader;
+static uint64_t g_iosTemporalFrameIndex;
+static float g_iosJitterX, g_iosJitterY;
+static bool IOSTemporalRequested()
+{
+    static const bool requested = [] {
+        const char* value = std::getenv("UNLEASHED_IOS_METALFX_TEMPORAL");
+        return value != nullptr && value[0] == '1';
+    }();
+    return requested;
+}
+static float IOSHalton(uint32_t index, uint32_t base)
+{
+    float result = 0.0f, fraction = 1.0f;
+    while (index) { fraction /= base; result += fraction * (index % base); index /= base; }
+    return result;
+}
+static bool IOSMetalFXRequested()
+{
+    // The menu setting applies live; the launch environment overrides it for A/B runs.
+    static const int forced = [] {
+        const char* value = std::getenv("UNLEASHED_IOS_METALFX_SPATIAL");
+        return value == nullptr ? -1 : int(value[0] == '1');
+    }();
+    return (forced < 0 ? bool(Config::MetalFXUpscaling) : forced == 1) || IOSTemporalRequested();
+}
+
+// UNLEASHED_IOS_GPU_PASS_DIAGNOSTICS=1: name the next render pass in sampled frames.
+static void IOSLabelNextPass(const char* label);
+#endif
+
 static std::unique_ptr<RenderPipeline> g_gammaCorrectionPipeline;
 
 struct std::unique_ptr<RenderDescriptorSet> g_textureDescriptorSet;
@@ -429,6 +541,15 @@ static std::unique_ptr<RenderTexture> g_blankTextures[TEXTURE_DESCRIPTOR_NULL_CO
 static std::unique_ptr<RenderTextureView> g_blankTextureViews[TEXTURE_DESCRIPTOR_NULL_COUNT];
 
 static TextureDescriptorAllocator g_textureDescriptorAllocator;
+
+static void FreeTextureDescriptor(uint32_t descriptorIndex)
+{
+    // Uninitialized resources and the shared null textures do not own a slot.
+    if (descriptorIndex < TEXTURE_DESCRIPTOR_NULL_COUNT)
+        return;
+    g_textureDescriptorSet->setTexture(descriptorIndex, nullptr, RenderTextureLayout::UNKNOWN);
+    g_textureDescriptorAllocator.free(descriptorIndex);
+}
 
 static std::unique_ptr<RenderPipelineLayout> g_pipelineLayout;
 static xxHashMap<std::unique_ptr<RenderPipeline>> g_pipelines;
@@ -511,9 +632,12 @@ struct UploadBuffer
 
 struct UploadAllocator
 {
+    static constexpr uint32_t TRIM_AFTER_LOW_USAGE_FRAMES = 120;
+
     std::vector<UploadBuffer> buffers;
     uint32_t index = 0;
     uint32_t offset = 0;
+    uint32_t lowUsageFrames = 0;
 
     UploadAllocation allocate(uint32_t size, uint32_t alignment)
     {
@@ -533,7 +657,12 @@ struct UploadAllocator
         auto& buffer = buffers[index];
         if (buffer.buffer == nullptr)
         {
+#if defined(UNLEASHED_RECOMP_IOS)
+            // The iOS plume pin only gives buffers a GPU address on request.
+            buffer.buffer = g_device->createBuffer(RenderBufferDesc::UploadBuffer(UploadBuffer::SIZE, RenderBufferFlag::CONSTANT | RenderBufferFlag::VERTEX | RenderBufferFlag::INDEX | RenderBufferFlag::DEVICE_ADDRESSABLE));
+#else
             buffer.buffer = g_device->createBuffer(RenderBufferDesc::UploadBuffer(UploadBuffer::SIZE, RenderBufferFlag::CONSTANT | RenderBufferFlag::VERTEX | RenderBufferFlag::INDEX));
+#endif
             buffer.memory = reinterpret_cast<uint8_t*>(buffer.buffer->map());
             buffer.deviceAddress = buffer.buffer->getDeviceAddress();
         }
@@ -570,6 +699,21 @@ struct UploadAllocator
 
     void reset()
     {
+        // Keep peak buffers during heavy streaming, but drop back to one
+        // upload buffer after a short period of low usage (e.g. menus).
+        if (index == 0)
+        {
+            if (lowUsageFrames < TRIM_AFTER_LOW_USAGE_FRAMES)
+                ++lowUsageFrames;
+
+            if (lowUsageFrames >= TRIM_AFTER_LOW_USAGE_FRAMES && buffers.size() > 1)
+                buffers.resize(1);
+        }
+        else
+        {
+            lowUsageFrames = 0;
+        }
+
         index = 0;
         offset = 0;
     }
@@ -580,10 +724,12 @@ static UploadAllocator g_uploadAllocators[NUM_FRAMES];
 struct IntermediaryUploadAllocator
 {
     static constexpr size_t SIZE = 16 * 1024 * 1024;
+    static constexpr uint32_t TRIM_AFTER_LOW_USAGE_FRAMES = 120;
 
     std::vector<std::unique_ptr<uint8_t[]>> buffers;
     uint32_t index = 0;
     uint32_t offset = 0;
+    uint32_t lowUsageFrames = 0;
 
     uint8_t* allocate(uint32_t size)
     {
@@ -617,6 +763,19 @@ struct IntermediaryUploadAllocator
 
     void reset()
     {
+        if (index == 0)
+        {
+            if (lowUsageFrames < TRIM_AFTER_LOW_USAGE_FRAMES)
+                ++lowUsageFrames;
+
+            if (lowUsageFrames >= TRIM_AFTER_LOW_USAGE_FRAMES && buffers.size() > 1)
+                buffers.resize(1);
+        }
+        else
+        {
+            lowUsageFrames = 0;
+        }
+
         index = 0;
         offset = 0;
     }
@@ -626,6 +785,7 @@ static IntermediaryUploadAllocator g_intermediaryUploadAllocator;
 
 static std::vector<GuestResource*> g_tempResources[NUM_FRAMES];
 static std::vector<std::unique_ptr<RenderBuffer>> g_tempBuffers[NUM_FRAMES];
+static std::vector<std::unique_ptr<RenderPipeline>> g_tempPipelines[NUM_FRAMES];
 
 template<GuestPrimitiveType PrimitiveType>
 struct PrimitiveIndexData
@@ -714,8 +874,19 @@ struct PrimitiveIndexData
 static PrimitiveIndexData<D3DPT_TRIANGLEFAN> g_triangleFanIndexData;
 static PrimitiveIndexData<D3DPT_QUADLIST> g_quadIndexData;
 
+#if defined(UNLEASHED_RECOMP_IOS)
+// Descriptor slots replaced by resolve swaps; freed once this frame's GPU work is done.
+static std::vector<uint32_t> g_iosRetiredDescriptors[NUM_FRAMES];
+#endif
+
 static void DestructTempResources()
 {
+#if defined(UNLEASHED_RECOMP_IOS)
+    for (const uint32_t descriptorIndex : g_iosRetiredDescriptors[g_frame])
+        FreeTextureDescriptor(descriptorIndex);
+    g_iosRetiredDescriptors[g_frame].clear();
+#endif
+
     for (auto resource : g_tempResources[g_frame])
     {
         switch (resource->type)
@@ -728,13 +899,17 @@ static void DestructTempResources()
             if (texture->mappedMemory != nullptr)
                 g_userHeap.Free(texture->mappedMemory);
 
-            g_textureDescriptorAllocator.free(texture->descriptorIndex);
+            FreeTextureDescriptor(texture->descriptorIndex);
 
             if (texture->patchedTexture != nullptr)
-                g_textureDescriptorAllocator.free(texture->patchedTexture->descriptorIndex); 
+            {
+                FreeTextureDescriptor(texture->patchedTexture->descriptorIndex);
+            }
             
             if (texture->recreatedCubeMapTexture != nullptr)
-                g_textureDescriptorAllocator.free(texture->recreatedCubeMapTexture->descriptorIndex);
+            {
+                FreeTextureDescriptor(texture->recreatedCubeMapTexture->descriptorIndex);
+            }
 
             texture->~GuestTexture();
             break;
@@ -757,8 +932,7 @@ static void DestructTempResources()
         {
             const auto surface = reinterpret_cast<GuestSurface*>(resource);
 
-            if (surface->descriptorIndex != NULL)
-                g_textureDescriptorAllocator.free(surface->descriptorIndex);
+            FreeTextureDescriptor(surface->descriptorIndex);
 
             surface->~GuestSurface();
             break;
@@ -781,9 +955,11 @@ static void DestructTempResources()
 
     g_tempResources[g_frame].clear();
     g_tempBuffers[g_frame].clear();
+    g_tempPipelines[g_frame].clear();
 }
 
 static std::thread::id g_presentThreadId = std::this_thread::get_id();
+static std::thread::id g_mainThreadId = std::this_thread::get_id();
 static std::atomic<bool> g_readyForCommands;
 
 PPC_FUNC_IMPL(__imp__sub_824ECA00);
@@ -827,18 +1003,26 @@ static std::unique_ptr<uint8_t[]> g_buttonBcDiff;
 
 static void LoadEmbeddedResources()
 {
-    if (g_vulkan)
+    switch (g_backend)
     {
+    case Backend::VULKAN:
         g_shaderCache = std::make_unique<uint8_t[]>(g_spirvCacheDecompressedSize);
         ZSTD_decompress(g_shaderCache.get(), g_spirvCacheDecompressedSize, g_compressedSpirvCache, g_spirvCacheCompressedSize);
-    }
-#ifdef UNLEASHED_RECOMP_D3D12
-    else
-    {
+        break;
+#if defined(UNLEASHED_RECOMP_D3D12)
+    case Backend::D3D12:
         g_shaderCache = std::make_unique<uint8_t[]>(g_dxilCacheDecompressedSize);
         ZSTD_decompress(g_shaderCache.get(), g_dxilCacheDecompressedSize, g_compressedDxilCache, g_dxilCacheCompressedSize);
-    }
+        break;
+#elif defined(UNLEASHED_RECOMP_METAL)
+    case Backend::METAL:
+        g_shaderCache = std::make_unique<uint8_t[]>(g_airCacheDecompressedSize);
+        ZSTD_decompress(g_shaderCache.get(), g_airCacheDecompressedSize, g_compressedAirCache, g_airCacheCompressedSize);
+        break;
 #endif
+    default:
+        assert(false);
+    }
 
     g_buttonBcDiff = decompressZstd(g_button_bc_diff, g_button_bc_diff_uncompressed_size);
 }
@@ -886,6 +1070,7 @@ enum class RenderCommandType
     SetStreamSource,
     SetIndices,
     SetPixelShader,
+    TrimRuntimeCaches,
 };
 
 struct RenderCommand
@@ -1234,7 +1419,7 @@ static void ProcSetRenderState(const RenderCommand& cmd)
     }
     case D3DRS_ALPHAREF:
     {
-        SetDirtyValue(g_dirtyStates.pipelineState, g_sharedConstants.alphaThreshold, float(value) / 256.0f);
+        SetDirtyValue(g_dirtyStates.sharedConstants, g_sharedConstants.alphaThreshold, float(value) / 256.0f);
         break;
     }
     case D3DRS_ALPHABLENDENABLE:
@@ -1341,19 +1526,28 @@ static GuestShader* g_csdShader;
 
 static std::unique_ptr<GuestShader> g_enhancedMotionBlurShader;
 
-#ifdef UNLEASHED_RECOMP_D3D12
+#if defined(UNLEASHED_RECOMP_D3D12)
 
 #define CREATE_SHADER(NAME) \
     g_device->createShader( \
-        g_vulkan ? g_##NAME##_spirv : g_##NAME##_dxil, \
-        g_vulkan ? sizeof(g_##NAME##_spirv) : sizeof(g_##NAME##_dxil), \
-        "main", \
-        g_vulkan ? RenderShaderFormat::SPIRV : RenderShaderFormat::DXIL)
+        (g_backend == Backend::VULKAN) ? g_##NAME##_spirv : g_##NAME##_dxil, \
+        (g_backend == Backend::VULKAN) ? sizeof(g_##NAME##_spirv) : sizeof(g_##NAME##_dxil), \
+        "shaderMain", \
+        (g_backend == Backend::VULKAN) ? RenderShaderFormat::SPIRV : RenderShaderFormat::DXIL)
+
+#elif defined(UNLEASHED_RECOMP_METAL)
+
+#define CREATE_SHADER(NAME) \
+    g_device->createShader( \
+        (g_backend == Backend::VULKAN) ? g_##NAME##_spirv : g_##NAME##_air, \
+        (g_backend == Backend::VULKAN) ? sizeof(g_##NAME##_spirv) : sizeof(g_##NAME##_air), \
+        "shaderMain", \
+        (g_backend == Backend::VULKAN) ? RenderShaderFormat::SPIRV : RenderShaderFormat::METAL)
 
 #else
 
 #define CREATE_SHADER(NAME) \
-    g_device->createShader(g_##NAME##_spirv, sizeof(g_##NAME##_spirv), "main", RenderShaderFormat::SPIRV)
+    g_device->createShader(g_##NAME##_spirv, sizeof(g_##NAME##_spirv), "shaderMain", RenderShaderFormat::SPIRV)
 
 #endif
 
@@ -1630,8 +1824,15 @@ static void UpdateAndroidFrameRateVote(plume::RenderWindow window)
 
 static void CheckSwapChain()
 {
+    static uint64_t s_installerInvalidCounter = 0;
+#if defined(UNLEASHED_RECOMP_IOS)
+    static uint64_t failedAcquisitions = 0;
+    static std::chrono::steady_clock::time_point lastFailureLog;
+    static bool loggedFirstDrawable = false;
+#endif
+
     g_swapChain->setVsyncEnabled(Config::VSync);
-    g_swapChainValid &= !g_swapChain->needsResize();
+    const bool needsResize = g_swapChain->needsResize();
 
 #if defined(__ANDROID__)
     // Android replaces the ANativeWindow across background/foreground. The old VkSurfaceKHR
@@ -1643,9 +1844,13 @@ static void CheckSwapChain()
         g_swapChainValid = false;
 
     UpdateAndroidFrameRateVote(currentNativeWindow);
-#endif
-
     if (!g_swapChainValid)
+#else
+    if (needsResize)
+        g_swapChainValid = false;
+
+    if (!g_swapChainValid && needsResize)
+#endif
     {
 #if defined(__ANDROID__)
         const uint64_t nowMs = SDL_GetTicks64();
@@ -1692,6 +1897,11 @@ static void CheckSwapChain()
         }
 #endif
     }
+    else if (!g_swapChainValid)
+    {
+        // Recover from present/acquire failures that don't require a resize.
+        g_swapChainValid = true;
+    }
 
 #if defined(__ANDROID__)
 skipResizeAttempt:
@@ -1706,6 +1916,42 @@ skipResizeAttempt:
         g_swapChainValid = g_swapChain->acquireTexture(g_acquireSemaphores[g_frame].get(), &g_backBufferIndex);
         g_swapChainAcquireProfiler.End();
     }
+
+#if defined(UNLEASHED_RECOMP_IOS)
+    if (!g_swapChainValid)
+    {
+        ++failedAcquisitions;
+        const auto now = std::chrono::steady_clock::now();
+        if (failedAcquisitions == 1 || now - lastFailureLog >= std::chrono::seconds(5))
+        {
+            LOGFN_ERROR("iOS drawable unavailable: attempts={}, size={}x{}, empty={}, focused={}, needsResize={}",
+                failedAcquisitions, g_swapChain->getWidth(), g_swapChain->getHeight(),
+                g_swapChain->isEmpty(), GameWindow::s_isFocused.load(), needsResize);
+            lastFailureLog = now;
+        }
+    }
+    else
+    {
+        if (!loggedFirstDrawable || failedAcquisitions != 0)
+            LOGFN("iOS drawable acquired: index={}, size={}x{}, priorFailures={}",
+                g_backBufferIndex, g_swapChain->getWidth(), g_swapChain->getHeight(), failedAcquisitions);
+        loggedFirstDrawable = true;
+        failedAcquisitions = 0;
+    }
+#endif
+
+#if !defined(__ANDROID__)
+    if (InstallerWizard::s_isVisible && !g_swapChainValid)
+    {
+        s_installerInvalidCounter++;
+        if ((s_installerInvalidCounter % 120) == 0)
+        {
+            os::logger::Log(fmt::format(
+                "CheckSwapChain - still invalid during installer (count: {}, needsResize: {}, swapChainSize: {}x{}, isEmpty: {})",
+                s_installerInvalidCounter, needsResize, g_swapChain->getWidth(), g_swapChain->getHeight(), g_swapChain->isEmpty()));
+        }
+    }
+#endif
 
     if (g_needsResize)
         Video::ComputeViewportDimensions();
@@ -1727,6 +1973,57 @@ static void BeginCommandList()
     {
         uint32_t width = Video::s_viewportWidth;
         uint32_t height = Video::s_viewportHeight;
+
+#if defined(UNLEASHED_RECOMP_IOS)
+        g_iosMetalFXActive = false;
+        g_iosMetalFXScaled = false;
+        g_iosTemporalActive = false;
+        g_iosTemporalInputsReady = false;
+        g_iosMotionBlurDraw = false;
+        g_iosObjectVelocityDraw = false;
+        g_iosTemporalSceneDepth = nullptr;
+        g_iosJitterX = g_iosJitterY = 0.0f;
+        plume::beginMetalTemporalFrame();
+        if (IOSMetalFXRequested() && g_backend == Backend::METAL && Config::ResolutionScale > 0.0f && Config::ResolutionScale < 1.0f)
+        {
+            const uint32_t inputWidth = std::max(1u, uint32_t(round(width * Config::ResolutionScale)));
+            const uint32_t inputHeight = std::max(1u, uint32_t(round(height * Config::ResolutionScale)));
+            g_iosMetalFXActive = plume::prepareMetalSpatialUpscaling(g_device.get(), inputWidth, inputHeight,
+                width, height, BACKBUFFER_FORMAT);
+            if (g_iosMetalFXActive)
+            {
+                if (inputWidth != g_intermediaryBackBufferTextureWidth || inputHeight != g_intermediaryBackBufferTextureHeight ||
+                    width != g_iosMetalFXOutputWidth || height != g_iosMetalFXOutputHeight)
+                    g_iosPreviousTemporalFrame = false;
+                if (IOSTemporalRequested() && Config::MotionBlur != EMotionBlur::Off)
+                    g_iosTemporalActive = plume::prepareMetalTemporalUpscaling(g_device.get(), inputWidth, inputHeight,
+                        width, height, BACKBUFFER_FORMAT);
+                if (g_iosTemporalActive && g_iosPreviousTemporalFrame)
+                {
+                    const uint32_t sample = uint32_t(g_iosTemporalFrameIndex++ % 16) + 1;
+                    g_iosJitterX = IOSHalton(sample, 2) - 0.5f;
+                    g_iosJitterY = IOSHalton(sample, 3) - 0.5f;
+                }
+                if (!g_iosMetalFXOutput || g_iosMetalFXOutputWidth != width || g_iosMetalFXOutputHeight != height)
+                {
+                    Video::WaitForGPU();
+                    g_backBuffer->framebuffers.clear();
+                    if (g_iosMetalFXOutputDescriptor == 0)
+                        g_iosMetalFXOutputDescriptor = g_textureDescriptorAllocator.allocate();
+                    g_iosMetalFXOutput = g_device->createTexture(RenderTextureDesc::Texture2D(width, height, 1,
+                        BACKBUFFER_FORMAT, RenderTextureFlag::RENDER_TARGET));
+                    g_textureDescriptorSet->setTexture(g_iosMetalFXOutputDescriptor, g_iosMetalFXOutput.get(), RenderTextureLayout::SHADER_READ);
+                    g_iosMetalFXOutputWidth = width; g_iosMetalFXOutputHeight = height;
+                }
+                width = inputWidth; height = inputHeight;
+                // Guest UI layout remains in native logical coordinates.
+            }
+        }
+#endif
+
+#if defined(UNLEASHED_RECOMP_IOS)
+        if (!g_iosTemporalActive) g_iosPreviousTemporalFrame = false;
+#endif
 
         bool usingIntermediaryTexture = (width != g_swapChain->getWidth()) || (height != g_swapChain->getHeight()) ||
             Config::XboxColorCorrection || (abs(Config::Brightness - 0.5f) > 0.001f);
@@ -1812,6 +2109,8 @@ static void ApplyLowEndDefaults()
 #ifdef __ANDROID__
     // MSAA triggers rendering artifacts on Turnip a7xx gen3 and is never worth its cost here.
     ApplyLowEndDefault(Config::AntiAliasing, EAntiAliasing::None, changed);
+#elif defined(UNLEASHED_RECOMP_IOS)
+    ApplyLowEndDefault(Config::AntiAliasing, EAntiAliasing::None, changed);
 #else
     ApplyLowEndDefault(Config::AntiAliasing, EAntiAliasing::MSAA2x, changed);
 #endif
@@ -1825,8 +2124,25 @@ static void ApplyLowEndDefaults()
     }
 }
 
+#if defined(__APPLE__) && TARGET_OS_IOS
+static void ApplyIOSMetalHUDConfig()
+{
+    setenv("MTL_HUD_ENABLED", Config::MetalHUD ? "1" : "0", 1);
+}
+#endif
+
 bool Video::CreateHostDevice(const char *sdlVideoDriver, bool graphicsApiRetry)
 {
+#if defined(__APPLE__) && TARGET_OS_IOS
+    // SDL's Metal view can create a device while initializing the window.
+    // Configure the HUD before that first Metal device is created.
+    ApplyIOSMetalHUDConfig();
+#endif
+#ifdef UNLEASHED_RECOMP_METAL
+    plume::setMetalDiagnosticCallback([](const char *message, bool error) {
+        os::logger::Log(message, error ? os::logger::ELogType::Error : os::logger::ELogType::None);
+    });
+#endif
     for (uint32_t i = 0; i < 16; i++)
         g_inputSlots[i].index = i;
 
@@ -1835,9 +2151,16 @@ bool Video::CreateHostDevice(const char *sdlVideoDriver, bool graphicsApiRetry)
     ImPlot::CreateContext();
 
     GameWindow::Init(sdlVideoDriver);
+    if (GameWindow::s_pWindow == nullptr)
+    {
+        LOG_ERROR("Video::CreateHostDevice - GameWindow initialization failed (SDL window is null).");
+        return false;
+    }
 
-#ifdef UNLEASHED_RECOMP_D3D12
-    g_vulkan = DetectWine() || Config::GraphicsAPI == EGraphicsAPI::Vulkan;
+#if defined(UNLEASHED_RECOMP_D3D12)
+    g_backend = (DetectWine() || Config::GraphicsAPI == EGraphicsAPI::Vulkan) ? Backend::VULKAN : Backend::D3D12;
+#elif defined(UNLEASHED_RECOMP_METAL)
+    g_backend = Config::GraphicsAPI == EGraphicsAPI::Vulkan ? Backend::VULKAN : Backend::METAL;
 #endif
 
     // Attempt to create the possible backends using a vector of function pointers. Whichever succeeds first will be the chosen API.
@@ -1850,15 +2173,18 @@ bool Video::CreateHostDevice(const char *sdlVideoDriver, bool graphicsApiRetry)
     if (graphicsApiRetry)
     {
         // If we are attempting to create again after a reboot due to a crash, swap the order.
-        g_vulkan = !g_vulkan;
+        g_backend = (g_backend == Backend::VULKAN) ? Backend::D3D12 : Backend::VULKAN;
 
         // Don't allow redirection to Vulkan if we are retrying after a crash, 
         // so the user can at least boot the game with D3D12 if Vulkan fails to work.
         allowVulkanRedirection = false;
     }
 
-    interfaceFunctions.push_back(g_vulkan ? CreateVulkanInterfaceWrapper : CreateD3D12Interface);
-    interfaceFunctions.push_back(g_vulkan ? CreateD3D12Interface : CreateVulkanInterfaceWrapper);
+    interfaceFunctions.push_back((g_backend == Backend::VULKAN) ? CreateVulkanInterfaceWrapper : CreateD3D12Interface);
+    interfaceFunctions.push_back((g_backend == Backend::VULKAN) ? CreateD3D12Interface : CreateVulkanInterfaceWrapper);
+#elif defined(UNLEASHED_RECOMP_METAL)
+    interfaceFunctions.push_back((g_backend == Backend::VULKAN) ? CreateVulkanInterfaceWrapper : CreateMetalInterface);
+    interfaceFunctions.push_back((g_backend == Backend::VULKAN) ? CreateMetalInterface : CreateVulkanInterfaceWrapper);
 #else
     interfaceFunctions.push_back(CreateVulkanInterfaceWrapper);
 #endif
@@ -1881,9 +2207,19 @@ bool Video::CreateHostDevice(const char *sdlVideoDriver, bool graphicsApiRetry)
             g_device = g_interface->createDevice(Config::GraphicsDevice);
             if (g_device != nullptr)
             {
+#ifdef UNLEASHED_RECOMP_METAL
+                if (interfaceFunction == CreateMetalInterface && !g_device->getCapabilities().bufferDeviceAddress)
+                {
+                    LOGF_ERROR("Metal device '{}' cannot run the generated shaders: GPU addresses require Tier 2 argument buffers and iOS 16/macOS 13 or later.",
+                        g_device->getDescription().name);
+                    g_device.reset();
+                    g_interface.reset();
+                    continue;
+                }
+#endif
                 const RenderDeviceDescription &deviceDescription = g_device->getDescription();
                 
-#ifdef UNLEASHED_RECOMP_D3D12
+#if defined(UNLEASHED_RECOMP_D3D12)
                 if (interfaceFunction == CreateD3D12Interface)
                 {
                     if (allowVulkanRedirection)
@@ -1914,7 +2250,7 @@ bool Video::CreateHostDevice(const char *sdlVideoDriver, bool graphicsApiRetry)
 
                             // In case Vulkan fails to initialize, we will try D3D12 again afterwards, 
                             // just to get the game to boot. This only really happens in very old Intel GPU drivers.
-                            if (!g_vulkan)
+                            if (g_backend != Backend::VULKAN)
                             {
                                 interfaceFunctions.push_back(CreateD3D12Interface);
                                 allowVulkanRedirection = false;
@@ -1923,13 +2259,11 @@ bool Video::CreateHostDevice(const char *sdlVideoDriver, bool graphicsApiRetry)
                             continue;
                         }
                     }
-
-                    // Hardware resolve seems to be completely bugged on Intel D3D12 drivers.
-                    g_hardwareResolve = (deviceDescription.vendor != RenderDeviceVendor::INTEL);
-                    g_hardwareDepthResolve = (deviceDescription.vendor != RenderDeviceVendor::INTEL);
                 }
 
-                g_vulkan = (interfaceFunction == CreateVulkanInterfaceWrapper);
+                g_backend = (interfaceFunction == CreateVulkanInterfaceWrapper) ? Backend::VULKAN : Backend::D3D12;
+#elif defined(UNLEASHED_RECOMP_METAL)
+                g_backend = (interfaceFunction == CreateVulkanInterfaceWrapper) ? Backend::VULKAN : Backend::METAL;
 #endif
                 // Enable triangle strip workaround if we are on AMD, as there is a bug where
                 // restart indices cause triangles to be culled incorrectly. Converting them to degenerate triangles fixes it.
@@ -1965,17 +2299,19 @@ bool Video::CreateHostDevice(const char *sdlVideoDriver, bool graphicsApiRetry)
     if (graphicsApiRetry)
     {
         // If we managed to create a device after retrying it in a reboot, remember the one we picked.
-        Config::GraphicsAPI = g_vulkan ? EGraphicsAPI::Vulkan : EGraphicsAPI::D3D12;
+        Config::GraphicsAPI = g_backend == Backend::VULKAN ? EGraphicsAPI::Vulkan : EGraphicsAPI::D3D12;
     }
 #endif
 
     g_capabilities = g_device->getCapabilities();
+    LOGF("Texture capabilities: BC={}, ETC2/EAC={}, maximum dimension={}", g_capabilities.textureCompressionBC, g_capabilities.textureCompressionETC2, g_capabilities.maxTextureSize);
 
     {
         const RenderDeviceDescription &createdDeviceDescription = g_device->getDescription();
         LOGF("GPU device created: \"{}\" (vendor 0x{:X}, driver version 0x{:X}, API {}).",
             createdDeviceDescription.name, uint32_t(createdDeviceDescription.vendor),
-            createdDeviceDescription.driverVersion, g_vulkan ? "Vulkan" : "D3D12");
+            createdDeviceDescription.driverVersion,
+            g_backend == Backend::VULKAN ? "Vulkan" : g_backend == Backend::METAL ? "Metal" : "D3D12");
     }
 
 #if defined(__ANDROID__)
@@ -2018,11 +2354,14 @@ bool Video::CreateHostDevice(const char *sdlVideoDriver, bool graphicsApiRetry)
             LOG_WARNING("BC texture formats are unsupported by this device. Textures will be decompressed on the CPU at load time, increasing memory usage.");
     }
 
+#if !defined(UNLEASHED_RECOMP_IOS)
+    // The iOS plume pin does not report descriptor limits.
     if (g_capabilities.maxSampledImageDescriptors != 0)
         g_textureDescriptorSize = uint32_t(std::min<size_t>(TEXTURE_DESCRIPTOR_SIZE, g_capabilities.maxSampledImageDescriptors));
 
     if (g_capabilities.maxSamplerDescriptors != 0)
         g_samplerDescriptorSize = uint32_t(std::min<size_t>(SAMPLER_DESCRIPTOR_SIZE, g_capabilities.maxSamplerDescriptors));
+#endif
 
     if (g_textureDescriptorSize < TEXTURE_DESCRIPTOR_SIZE || g_samplerDescriptorSize < SAMPLER_DESCRIPTOR_SIZE)
     {
@@ -2079,15 +2418,24 @@ bool Video::CreateHostDevice(const char *sdlVideoDriver, bool graphicsApiRetry)
     switch (Config::TripleBuffering)
     {
     case ETripleBuffering::Auto:
-        if (g_vulkan)
-        {
+        switch (g_backend) {
+        case Backend::VULKAN:
             // Defaulting to 3 is fine if presentWait as supported, as the maximum frame latency allowed is only 1.
             bufferCount = g_device->getCapabilities().presentWait ? 3 : 2;
-        }
-        else
-        {
+            break;
+        case Backend::D3D12:
             // Defaulting to 3 is fine on D3D12 thanks to flip discard model.
             bufferCount = 3;
+            break;
+        case Backend::METAL:
+#if defined(UNLEASHED_RECOMP_IOS)
+            // Two drawables serialize rendering with scanout at any FPS cap; a missed
+            // refresh then idles the GPU, which clocks down and keeps missing it.
+            bufferCount = 3;
+#else
+            bufferCount = 2;
+#endif
+            break;
         }
 
         break;
@@ -2107,7 +2455,7 @@ bool Video::CreateHostDevice(const char *sdlVideoDriver, bool graphicsApiRetry)
     // A custom loader reaching dlopen/device creation is not sufficient: only a usable WSI
     // swapchain proves that Vulkan startup completed. If initial WSI creation is deferred,
     // CheckSwapChain() clears the marker after its first successful resize instead.
-    if (g_vulkan && g_swapChainValid)
+    if (g_backend == Backend::VULKAN && g_swapChainValid)
         AndroidMarkVulkanStartupSuccessful();
 #endif
 
@@ -2192,7 +2540,7 @@ bool Video::CreateHostDevice(const char *sdlVideoDriver, bool graphicsApiRetry)
 
     pipelineLayoutBuilder.addDescriptorSet(descriptorSetBuilder);
 
-    if (g_vulkan)
+    if (g_backend != Backend::D3D12)
     {
         pipelineLayoutBuilder.addPushConstant(0, 4, 24, RenderShaderStageFlag::VERTEX | RenderShaderStageFlag::PIXEL);
     }
@@ -2302,6 +2650,7 @@ bool Video::CreateHostDevice(const char *sdlVideoDriver, bool graphicsApiRetry)
 }
 
 static uint32_t g_waitForGPUCount = 0;
+static std::unordered_map<uint16_t, std::unique_ptr<GuestTexture>> g_xdbfTextureCacheOwned;
 
 void Video::WaitForGPU()
 {
@@ -2326,7 +2675,10 @@ void Video::WaitForGPU()
 
 static uint32_t CreateDevice(uint32_t a1, uint32_t a2, uint32_t a3, uint32_t a4, uint32_t a5, be<uint32_t>* a6)
 {
-    g_xdbfTextureCache = std::unordered_map<uint16_t, GuestTexture *>();
+    LOGFN("Guest CreateDevice begin - a1: 0x{:08X}, a2: 0x{:08X}, a3: 0x{:08X}, a4: 0x{:08X}, a5: 0x{:08X}", a1, a2, a3, a4, a5);
+
+    g_xdbfTextureCache.clear();
+    g_xdbfTextureCacheOwned.clear();
 
     for (auto &achievement : g_xdbfWrapper.GetAchievements(XDBF_LANGUAGE_ENGLISH))
     {
@@ -2334,8 +2686,13 @@ static uint32_t CreateDevice(uint32_t a1, uint32_t a2, uint32_t a3, uint32_t a4,
         if (!achievement.pImageBuffer || !achievement.ImageBufferSize)
             continue;
 
-        g_xdbfTextureCache[achievement.ID] =
-            LoadTexture((uint8_t *)achievement.pImageBuffer, achievement.ImageBufferSize).release();
+        auto texture = LoadTexture((uint8_t *)achievement.pImageBuffer, achievement.ImageBufferSize);
+        if (!texture)
+            continue;
+
+        auto* texturePtr = texture.get();
+        g_xdbfTextureCache.insert_or_assign(achievement.ID, texturePtr);
+        g_xdbfTextureCacheOwned.insert_or_assign(achievement.ID, std::move(texture));
     }
 
     // Move backbuffer to guest memory.
@@ -2375,6 +2732,7 @@ static uint32_t CreateDevice(uint32_t a1, uint32_t a2, uint32_t a3, uint32_t a4,
 
     *a6 = g_memory.MapVirtual(device);
 
+    LOGFN("Guest CreateDevice end - device: 0x{:08X}", a6->get());
     return 0;
 }
 
@@ -2411,7 +2769,10 @@ static void LockTextureRect(GuestTexture* texture, uint32_t, GuestLockedRect* lo
 
 static void UnlockTextureRect(GuestTexture* texture) 
 {
-    assert(std::this_thread::get_id() == g_presentThreadId);
+    if (texture == nullptr || texture->mappedMemory == nullptr)
+    {
+        return;
+    }
 
     RenderCommand cmd;
     cmd.type = RenderCommandType::UnlockTextureRect;
@@ -2709,17 +3070,36 @@ static void DrawProfiler()
         ImGui::Text("BC Textures: %s", g_capabilities.textureCompressionBC
             ? "Supported" : (g_capabilities.textureCompressionETC2 ? "ETC2 Transcode" : "CPU Decode"));
         ImGui::Text("Dynamic Depth Bias: %s", g_capabilities.dynamicDepthBias ? "Supported" : "Unsupported");
+        ImGui::Text("Hardware Resolve Modes: %s", g_capabilities.resolveModes ? "Supported" : "Unsupported");
         ImGui::Text("Triangle Strip Workaround: %s", g_triangleStripWorkaround ? "Enabled" : "Disabled");
-        ImGui::Text("Hardware Resolve: %s", g_hardwareResolve ? "Enabled" : "Disabled");
-        ImGui::Text("Hardware Depth Resolve: %s", g_hardwareDepthResolve ? "Enabled" : "Disabled");
         ImGui::NewLine();
 
-        ImGui::Text("API: %s", g_vulkan ? "Vulkan" : "D3D12");
+#ifndef NDEBUG
+        std::string backend;
+
+        switch (g_backend) {
+        case Backend::VULKAN:
+            backend = "Vulkan";
+            break;
+        case Backend::D3D12:
+            backend = "D3D12";
+            break;
+        case Backend::METAL:
+            backend = "Metal";
+            break;
+        default:
+            assert(false && "Unknown graphics backend");
+        }
+
+        ImGui::Text("API: %s", backend.c_str());
         ImGui::Text("Device: %s", g_device->getDescription().name.c_str());
         ImGui::Text("Device Type: %s", DeviceTypeName(g_device->getDescription().type));
         ImGui::Text("VRAM: %.2f MiB", (double)(g_device->getDescription().dedicatedVideoMemory) / (1024.0 * 1024.0));
         ImGui::Text("UMA: %s", g_capabilities.uma ? "Supported" : "Unsupported");
         ImGui::Text("GPU Upload Heap: %s", g_capabilities.gpuUploadHeap ? "Supported" : "Unsupported");
+
+        ImGui::NewLine();
+#endif
 
         const char* sdlVideoDriver = SDL_GetCurrentVideoDriver();
         if (sdlVideoDriver != nullptr)
@@ -2796,9 +3176,70 @@ static void DrawFPS()
     drawList->AddText(font, fontSize, textPos, IM_COL32_WHITE, fmt.c_str());
 }
 
+#if defined(__APPLE__) && TARGET_OS_IOS
+static uint64_t GetIOSFreeMemoryBytes()
+{
+    mach_port_t hostPort = mach_host_self();
+    vm_size_t pageSize = 0;
+    if (host_page_size(hostPort, &pageSize) != KERN_SUCCESS)
+        return 0;
+
+    vm_statistics64_data_t vmStats{};
+    mach_msg_type_number_t count = HOST_VM_INFO64_COUNT;
+    if (host_statistics64(hostPort, HOST_VM_INFO64, reinterpret_cast<host_info64_t>(&vmStats), &count) != KERN_SUCCESS)
+        return 0;
+
+    return (uint64_t(vmStats.free_count) + uint64_t(vmStats.inactive_count)) * uint64_t(pageSize);
+}
+
+static void DrawIOSLowMemoryWarning()
+{
+    constexpr uint64_t warningThresholdBytes = 500ull * 1024ull * 1024ull;
+
+    static double nextSampleTime = 0.0;
+    static uint64_t freeMemoryBytes = 0;
+
+    const double currentTime = ImGui::GetTime();
+    if (currentTime >= nextSampleTime)
+    {
+        freeMemoryBytes = GetIOSFreeMemoryBytes();
+        nextSampleTime = currentTime + 0.5;
+    }
+
+    if (freeMemoryBytes == 0 || freeMemoryBytes >= warningThresholdBytes)
+        return;
+
+    const double freeMemoryMiB = double(freeMemoryBytes) / (1024.0 * 1024.0);
+    const std::string warningText = fmt::format("Low memory warning: {:.0f} MB free", freeMemoryMiB);
+
+    auto* drawList = ImGui::GetBackgroundDrawList();
+    ImFont* font = ImFontAtlasSnapshot::GetFont("FOT-SeuratPro-M.otf");
+    const float fontSize = Scale(11);
+    const ImVec2 textSize = font->CalcTextSizeA(fontSize, FLT_MAX, 0.0f, warningText.c_str());
+    const ImVec2 textPos = {
+        std::max(Scale(8), (float(Video::s_viewportWidth) - textSize.x) * 0.5f),
+        Scale(8)
+    };
+
+    const ImVec2 padding = { Scale(8), Scale(4) };
+    const ImVec2 bgMin = { textPos.x - padding.x, textPos.y - padding.y };
+    const ImVec2 bgMax = { textPos.x + textSize.x + padding.x, textPos.y + textSize.y + padding.y };
+
+    drawList->AddRectFilled(bgMin, bgMax, IM_COL32(0, 0, 0, 185), Scale(4));
+    drawList->AddText(font, fontSize, textPos, IM_COL32(255, 165, 0, 255), warningText.c_str());
+}
+#endif
+
 static void DrawImGui()
 {
+#if defined(__APPLE__) && TARGET_OS_IPHONE
+    if (std::this_thread::get_id() == g_mainThreadId)
+        ImGui_ImplSDL2_NewFrame();
+    else
+        dispatch_sync_f(dispatch_get_main_queue(), nullptr, [](void*) { ImGui_ImplSDL2_NewFrame(); });
+#else
     ImGui_ImplSDL2_NewFrame();
+#endif
 
     auto& io = ImGui::GetIO();
     io.DisplaySize = { float(Video::s_viewportWidth), float(Video::s_viewportHeight) };
@@ -2868,10 +3309,14 @@ static void DrawImGui()
     assert(ImGui::GetBackgroundDrawList()->_ClipRectStack.Size == 1 && "Some clip rects were not removed from the stack!");
 
     DrawFPS();
+#if defined(__APPLE__) && TARGET_OS_IOS
+    DrawIOSLowMemoryWarning();
+#endif
     DrawProfiler();
     ImGui::Render();
 
     auto drawData = ImGui::GetDrawData();
+
     if (drawData->CmdListsCount != 0)
     {
         RenderCommand cmd;
@@ -2882,8 +3327,48 @@ static void DrawImGui()
 
 static void SetFramebuffer(GuestSurface *renderTarget, GuestSurface *depthStencil, bool settingForClear);
 
+#if defined(UNLEASHED_RECOMP_IOS)
+static void ProcUpscaleIOSBackBuffer()
+{
+    if (!g_swapChainValid || !g_iosMetalFXActive || g_iosMetalFXScaled)
+        return;
+    auto &list = g_commandLists[g_frame];
+    RenderTextureBarrier barriers[] = {
+        RenderTextureBarrier(g_intermediaryBackBufferTexture.get(), RenderTextureLayout::SHADER_READ),
+        RenderTextureBarrier(g_iosMetalFXOutput.get(), RenderTextureLayout::GENERAL)
+    };
+    list->barriers(RenderBarrierStage::GRAPHICS | RenderBarrierStage::COMPUTE, barriers, std::size(barriers));
+    const bool temporal = g_iosTemporalActive && plume::encodeMetalTemporalUpscaling(list.get(),
+        g_intermediaryBackBufferTexture.get(), g_iosMetalFXOutput.get(), g_iosJitterX, g_iosJitterY,
+        !g_iosPreviousTemporalFrame);
+    if (!temporal)
+        plume::encodeMetalSpatialUpscaling(list.get(), g_intermediaryBackBufferTexture.get(), g_iosMetalFXOutput.get());
+    static int previousMode = -1;
+    if (IOSTemporalRequested() && previousMode != int(temporal))
+    {
+        os::logger::Log(temporal ? "MetalFX mode: Temporal; real scene depth and decoded game motion, 16-sample jitter"
+            : "MetalFX mode: Spatial fallback; Temporal unsupported or no matching scene inputs");
+        previousMode = int(temporal);
+    }
+    g_iosPreviousTemporalFrame = temporal;
+    list->barriers(RenderBarrierStage::GRAPHICS | RenderBarrierStage::COMPUTE,
+        RenderTextureBarrier(g_iosMetalFXOutput.get(), RenderTextureLayout::SHADER_READ));
+    g_backBuffer->texture = g_iosMetalFXOutput.get();
+    g_backBuffer->layout = RenderTextureLayout::SHADER_READ;
+    g_backBuffer->width = Video::s_viewportWidth;
+    g_backBuffer->height = Video::s_viewportHeight;
+    g_iosMetalFXScaled = true;
+    g_dirtyStates.renderTargetAndDepthStencil = true;
+    g_dirtyStates.viewport = true;
+    g_dirtyStates.scissorRect = true;
+}
+#endif
+
 static void ProcDrawImGui(const RenderCommand& cmd)
 {
+#if defined(UNLEASHED_RECOMP_IOS)
+    ProcUpscaleIOSBackBuffer(); // Draw the host menus at native resolution afterward.
+#endif
     // Make sure the backbuffer is the current target.
     AddBarrier(g_backBuffer, RenderTextureLayout::COLOR_WRITE);
     FlushBarriers();
@@ -2894,6 +3379,9 @@ static void ProcDrawImGui(const RenderCommand& cmd)
 
     commandList->setGraphicsPipelineLayout(g_imPipelineLayout.get());
     commandList->setPipeline(pipeline);
+#if defined(UNLEASHED_RECOMP_IOS)
+    IOSLabelNextPass("host|ImGui");
+#endif
     commandList->setGraphicsDescriptorSet(g_textureDescriptorSet.get(), 0);
     commandList->setGraphicsDescriptorSet(g_samplerDescriptorSet.get(), 1);
 
@@ -3058,18 +3546,463 @@ void Video::OnAndroidResume()
     // This fixes black screen on resume while audio continues independently.
     g_swapChainValid = false;
     g_pendingWaitOnSwapChain = true;
+#if defined(__ANDROID__)
     g_androidSwapchainRetryAfterMs = 0;
+#endif
     // Note: actual recreate happens in CheckSwapChain() via g_swapChain->resize()
 }
 
 static bool g_shouldPrecompilePipelines;
 static std::atomic<bool> g_executedCommandList;
 
-void Video::Present()
+#if defined(UNLEASHED_RECOMP_IOS)
+static bool IOSFrameDiagnosticsEnabled()
+{
+    static const bool enabled = [] {
+        const char* value = std::getenv("UNLEASHED_IOS_FRAME_DIAGNOSTICS");
+        return value != nullptr && value[0] == '1';
+    }();
+    return enabled;
+}
+
+static bool IOSPassDiagnosticsEnabled()
+{
+    static const bool enabled = [] {
+        const char* value = std::getenv("UNLEASHED_IOS_GPU_PASS_DIAGNOSTICS");
+        return value != nullptr && value[0] == '1';
+    }();
+    return enabled;
+}
+
+static void IOSLabelNextPass(const char* label)
+{
+    if (IOSPassDiagnosticsEnabled())
+        plume::setMetalPassDiagnosticLabel(g_commandLists[g_frame].get(), label);
+}
+
+// UNLEASHED_IOS_RESOLVE_DIAGNOSTICS=1: classify resolve copies by what forced them
+// and whether the destination texture is bound before it is resolved again.
+enum : uint8_t { IOSResolveNone, IOSResolveClear, IOSResolveDraw, IOSResolvePresent, IOSResolveTriggerCount };
+static const char* const g_iosResolveTriggerNames[] = { "none", "clear", "draw", "present" };
+static uint8_t g_iosResolveTrigger = IOSResolveNone;
+static struct { uint32_t copies, read, unread; uint64_t pixels; } g_iosResolveStats[IOSResolveTriggerCount][2];
+
+static bool IOSResolveDiagnosticsEnabled()
+{
+    static const bool enabled = [] {
+        const char* value = std::getenv("UNLEASHED_IOS_RESOLVE_DIAGNOSTICS");
+        return value != nullptr && value[0] == '1';
+    }();
+    return enabled;
+}
+
+static bool IOSResolveIsLarge(const GuestTexture* texture)
+{
+    return uint64_t(texture->width) * texture->height >= 1000000;
+}
+
+static void IOSResolveCopied(GuestTexture* texture)
+{
+    if (!IOSResolveDiagnosticsEnabled())
+        return;
+    auto& stats = g_iosResolveStats[g_iosResolveTrigger][IOSResolveIsLarge(texture)];
+    ++stats.copies;
+    stats.pixels += uint64_t(texture->width) * texture->height;
+    texture->iosResolveTrigger = g_iosResolveTrigger;
+}
+
+// read=true when the texture is bound for sampling, false when a new resolve replaces it.
+static void IOSResolveConsumed(GuestTexture* texture, bool read)
+{
+    if (!IOSResolveDiagnosticsEnabled() || texture == nullptr || texture->iosResolveTrigger == IOSResolveNone)
+        return;
+    auto& stats = g_iosResolveStats[texture->iosResolveTrigger][IOSResolveIsLarge(texture)];
+    ++(read ? stats.read : stats.unread);
+    static uint32_t reports;
+    if (!read && IOSResolveIsLarge(texture) && reports++ < 12)
+        LOGFN("Resolve copy replaced unread: trigger={}, texture={:X}, size={}x{}, format={}",
+            g_iosResolveTriggerNames[texture->iosResolveTrigger], uintptr_t(texture), texture->width, texture->height, int(texture->format));
+    texture->iosResolveTrigger = IOSResolveNone;
+}
+
+// Textures stay bound across draws, so also count a read when a draw samples a bound slot.
+static void IOSResolveCheckBoundTextures();
+
+// Video → Skip Unused Copies (UNLEASHED_IOS_SKIP_UNREAD_RESOLVES=0/1): the end-of-frame flush copies
+// every pending resolve, but some textures are always resolved again before anything
+// samples them. After a streak of such frames their flush copy is skipped. If a skipped
+// texture is ever sampled, it is logged and always copied from then on.
+static constexpr uint8_t IOS_UNREAD_RESOLVE_STREAK = 30;
+enum : uint8_t { IOSFrameEndNone, IOSFrameEndCopied, IOSFrameEndSkipped };
+static uint32_t g_iosSkippedResolves;
+static uint64_t g_iosSkippedResolvePixels;
+
+// A resolve target's kind is its format plus whether it covers the full render
+// resolution, which identifies it across stages and resolution scales (small targets
+// of the same format, e.g. bloom, are sampled every frame). A kind whose resolve was
+// ever sampled after a frame-end copy or skip is never skipped again; the set
+// persists in the user directory.
+static std::bitset<size_t(RenderFormat::MAX) * 2> g_iosSampledResolveFormats;
+static std::once_flag g_iosSampledResolveFormatsLoaded;
+
+static size_t IOSResolveKind(const GuestTexture* texture)
+{
+    const auto renderWidth = uint32_t(round(Video::s_viewportWidth * Config::ResolutionScale));
+    const auto renderHeight = uint32_t(round(Video::s_viewportHeight * Config::ResolutionScale));
+    const bool fullResolution = std::abs(int32_t(texture->width) - int32_t(renderWidth)) <= 1 &&
+        std::abs(int32_t(texture->height) - int32_t(renderHeight)) <= 1;
+    return size_t(texture->format) * 2 + fullResolution;
+}
+
+static std::filesystem::path IOSSampledResolveFormatsPath()
+{
+    return GetUserPath() / "ios_sampled_resolve_kinds.txt";
+}
+
+static void IOSLoadSampledResolveFormats()
+{
+    std::call_once(g_iosSampledResolveFormatsLoaded, [] {
+        std::ifstream file(IOSSampledResolveFormatsPath());
+        uint32_t format;
+        while (file >> format)
+        {
+            if (format < g_iosSampledResolveFormats.size())
+                g_iosSampledResolveFormats.set(format);
+        }
+    });
+}
+
+static void IOSRememberSampledResolveFormat(const GuestTexture* texture)
+{
+    const size_t kind = IOSResolveKind(texture);
+    if (g_iosSampledResolveFormats.test(kind))
+        return;
+    g_iosSampledResolveFormats.set(kind);
+    LOGFN("Resolve kind sampled after a frame-end resolve: format {}, {} ({}x{}); never skipping it.",
+        int(texture->format), (kind & 1) ? "full render resolution" : "other size", texture->width, texture->height);
+    std::ofstream file(IOSSampledResolveFormatsPath());
+    for (size_t i = 0; i < g_iosSampledResolveFormats.size(); i++)
+    {
+        if (g_iosSampledResolveFormats.test(i))
+            file << i << '\n';
+    }
+}
+
+static bool IOSSkipUnreadResolvesEnabled()
+{
+    // Graphics setting, applied live; the launch environment overrides it for A/B runs.
+    static const int forced = [] {
+        const char* value = std::getenv("UNLEASHED_IOS_SKIP_UNREAD_RESOLVES");
+        return value == nullptr ? -1 : int(value[0] == '1');
+    }();
+    return forced < 0 ? bool(Config::SkipUnusedCopies) : forced == 1;
+}
+
+static void IOSFrameEndResolveOutcome(GuestTexture* texture, bool read, int slot = -1)
+{
+    if (!IOSSkipUnreadResolvesEnabled() || texture == nullptr || texture->iosFrameEndResolve == IOSFrameEndNone)
+        return;
+    if (texture->iosFrameEndResolve == IOSFrameEndCopied)
+    {
+        texture->iosUnreadResolveStreak = read ? 0 : uint8_t(std::min(255, texture->iosUnreadResolveStreak + 1));
+        // Learn the kind before any skip happens when a copied texture is sampled.
+        if (read)
+            IOSRememberSampledResolveFormat(texture);
+    }
+    else if (read)
+    {
+        texture->iosAlwaysResolve = true;
+        texture->iosUnreadResolveStreak = 0;
+        IOSRememberSampledResolveFormat(texture);
+        // At SetTexture time the pipeline may still be the previous draw's.
+        LOGFN("Skipped resolve was sampled; always copying this kind from now on (format {}, texture {:X}, {}x{}). Slot {} ({}), pipeline: {}|{}",
+            int(texture->format), uintptr_t(texture), texture->width, texture->height, slot, slot < 0 ? "SetTexture" : "bound at draw",
+            g_pipelineState.vertexShader ? g_pipelineState.vertexShader->name : "-",
+            g_pipelineState.pixelShader ? g_pipelineState.pixelShader->name : "-");
+    }
+    texture->iosFrameEndResolve = IOSFrameEndNone;
+}
+
+// The draw that is about to be flushed (diagnostics for draw-triggered resolve copies).
+static struct { const char* kind; uint32_t primitiveType, count; const uint8_t* vertices; uint32_t stride; } g_iosCurrentDraw{ "?", 0, 0, nullptr, 0 };
+
+// Video → Reuse Render Targets (UNLEASHED_IOS_SWAP_RESOLVES=0/1): when a draw is about to overwrite a
+// surface whose resolve into a texture is still pending, the port normally copies
+// the surface into the texture first. If that draw provably rewrites every pixel of
+// the surface without reading it (opaque full-viewport quad, no blending, depth
+// test or alpha test), the texture can take the surface's memory instead and the
+// surface continue in the texture's old memory: no copy.
+static uint32_t g_iosSwappedResolves;
+static uint64_t g_iosSwappedResolvePixels;
+
+static bool IOSSwapResolvesEnabled()
+{
+    // Graphics setting, applied live; the launch environment overrides it for A/B runs.
+    static const int forced = [] {
+        const char* value = std::getenv("UNLEASHED_IOS_SWAP_RESOLVES");
+        return value == nullptr ? -1 : int(value[0] == '1');
+    }();
+    return forced < 0 ? bool(Config::ReuseRenderTargets) : forced == 1;
+}
+
+static float IOSLoadGuestFloat(const uint8_t* data)
+{
+    uint32_t value;
+    std::memcpy(&value, data, sizeof(value));
+    return std::bit_cast<float>(ByteSwap(value));
+}
+
+// A 4-vertex strip whose positions are exactly the corners of the viewport, either in
+// clip space or in pixels. Position is assumed to be the first element of the vertex.
+static bool IOSDrawCoversSurface(const GuestSurface* surface)
+{
+    if (std::strcmp(g_iosCurrentDraw.kind, "DrawUP") != 0 || g_iosCurrentDraw.primitiveType != D3DPT_TRIANGLESTRIP ||
+        g_iosCurrentDraw.count != 4 || g_iosCurrentDraw.vertices == nullptr || g_iosCurrentDraw.stride < 8)
+        return false;
+    float x[4], y[4];
+    for (uint32_t i = 0; i < 4; i++)
+    {
+        x[i] = IOSLoadGuestFloat(g_iosCurrentDraw.vertices + i * g_iosCurrentDraw.stride);
+        y[i] = IOSLoadGuestFloat(g_iosCurrentDraw.vertices + i * g_iosCurrentDraw.stride + 4);
+    }
+    const float minX = *std::min_element(x, x + 4), maxX = *std::max_element(x, x + 4);
+    const float minY = *std::min_element(y, y + 4), maxY = *std::max_element(y, y + 4);
+    // Guest quads carry the D3D9 half-pixel offset (shifted by up to one pixel, e.g.
+    // x in [-1.001, 0.999]; [-2, 0] for a 1x1 target), which the translated vertex
+    // shaders compensate. Require the full 2.0 clip-space span within a pixel of [-1, 1].
+    const float pixelX = 2.0f / float(surface->width), pixelY = 2.0f / float(surface->height);
+    const bool clipSpace = maxX - minX >= 2.0f - 1e-4f && maxY - minY >= 2.0f - 1e-4f &&
+        std::abs(minX + 1.0f) <= pixelX * 1.01f && std::abs(maxY - 1.0f) <= pixelY * 1.01f &&
+        std::abs(maxX - 1.0f) <= pixelX * 1.01f && std::abs(minY + 1.0f) <= pixelY * 1.01f;
+    const bool pixelSpace = minX <= 0.5f && maxX >= float(surface->width) - 0.5f && minY <= 0.5f && maxY >= float(surface->height) - 0.5f;
+    if (!clipSpace && !pixelSpace)
+        return false;
+    uint32_t corners = 0;
+    for (uint32_t i = 0; i < 4; i++)
+    {
+        if ((x[i] != minX && x[i] != maxX) || (y[i] != minY && y[i] != maxY))
+            return false;
+        corners |= 1u << ((x[i] == maxX) * 2 + (y[i] == maxY));
+    }
+    return corners == 0xF;
+}
+
+static bool IOSCanSwapResolve(const GuestSurface* surface, const GuestTexture* texture)
+{
+    return surface->sampleCount == RenderSampleCount::COUNT_1 && surface->format != RenderFormat::D32_FLOAT &&
+        texture->type == ResourceType::Texture && texture->viewDimension == RenderTextureViewDimension::TEXTURE_2D &&
+        texture->depth == 1 && texture->iosMipLevels == 1 && texture->iosRenderTargetUsage && texture->iosPlainView &&
+        texture->patchedTexture == nullptr && texture->recreatedCubeMapTexture == nullptr &&
+        texture->width == surface->width && texture->height == surface->height && texture->format == surface->format &&
+        texture->texture != surface->texture &&
+        !g_pipelineState.alphaBlendEnable && g_pipelineState.colorWriteEnable == uint32_t(RenderColorWriteEnable::ALL) &&
+        (!g_pipelineState.zEnable || g_pipelineState.zFunc == RenderComparisonFunction::ALWAYS) &&
+        (g_pipelineState.specConstants & (SPEC_CONSTANT_ALPHA_TEST | SPEC_CONSTANT_ALPHA_TO_COVERAGE)) == 0 &&
+        g_viewport.x == 0.0f && g_viewport.y == 0.0f &&
+        g_viewport.width >= float(surface->width) && g_viewport.height >= float(surface->height) &&
+        (!g_scissorTestEnable || (g_scissorRect.left <= 0 && g_scissorRect.top <= 0 &&
+            g_scissorRect.right >= int32_t(surface->width) && g_scissorRect.bottom >= int32_t(surface->height))) &&
+        IOSDrawCoversSurface(surface);
+}
+
+static void SetTextureInRenderThread(uint32_t index, GuestTexture* texture);
+static void AddBarrier(GuestBaseTexture* texture, RenderTextureLayout layout);
+
+static void IOSTrySwapResolve(GuestSurface* surface)
+{
+    if (!IOSSwapResolvesEnabled() || surface == nullptr || surface->destinationTextures.size() != 1)
+        return;
+    GuestTexture* texture = *surface->destinationTextures.begin();
+    if (!IOSCanSwapResolve(surface, texture))
+        return;
+
+    // The texture keeps the surface's rendered memory; the surface renders on into the
+    // texture's previous memory, which the draw overwrites completely.
+    std::swap(surface->textureHolder, texture->textureHolder);
+    std::swap(surface->texture, texture->texture);
+    std::swap(surface->textureView, texture->textureView);
+    std::swap(surface->layout, texture->layout);
+    // Bindless descriptors are read when the GPU executes, so earlier draws of this
+    // frame must keep seeing the old slots. Give both objects new slots instead and
+    // free the old ones after this frame's GPU work completes.
+    g_iosRetiredDescriptors[g_frame].push_back(surface->descriptorIndex);
+    g_iosRetiredDescriptors[g_frame].push_back(texture->descriptorIndex);
+    surface->descriptorIndex = g_textureDescriptorAllocator.allocate();
+    texture->descriptorIndex = g_textureDescriptorAllocator.allocate();
+    g_textureDescriptorSet->setTexture(surface->descriptorIndex, surface->texture, RenderTextureLayout::SHADER_READ, surface->textureView.get());
+    g_textureDescriptorSet->setTexture(texture->descriptorIndex, texture->texture, RenderTextureLayout::SHADER_READ, texture->textureView.get());
+    texture->framebuffer.reset(); // Its copy target was the old texture.
+
+    surface->destinationTextures.erase(texture);
+    texture->sourceSurface = nullptr;
+    IOSResolveCopied(texture); // Same outcome as a copy for the diagnostics.
+
+    // Same as after a copy: slots that sampled the surface point back at the texture.
+    for (uint32_t i = 0; i < std::size(g_textures); i++)
+    {
+        if (g_textures[i] == texture)
+            SetTextureInRenderThread(i, texture);
+    }
+
+    AddBarrier(texture, RenderTextureLayout::SHADER_READ);
+    g_dirtyStates.renderTargetAndDepthStencil = true;
+    ++g_iosSwappedResolves;
+    g_iosSwappedResolvePixels += uint64_t(surface->width) * surface->height;
+}
+
+static void IOSResolveCheckBoundTextures()
+{
+    const bool diagnostics = IOSResolveDiagnosticsEnabled();
+    if (!diagnostics && !IOSSkipUnreadResolvesEnabled())
+        return;
+    for (uint32_t i = 0; i < std::size(g_textures); i++)
+    {
+        if (diagnostics)
+            IOSResolveConsumed(g_textures[i], true);
+        IOSFrameEndResolveOutcome(g_textures[i], true, int(i));
+    }
+}
+
+// For each copy-on-write resolve of a color surface, describe whether the draw that
+// forces it would overwrite the whole surface without reading its old contents.
+static ankerl::unordered_dense::map<std::string, uint32_t> g_iosDrawResolveKinds;
+
+static void IOSDescribeDrawResolve(const GuestSurface* surface)
+{
+    if (!IOSResolveDiagnosticsEnabled() || surface == nullptr || surface->destinationTextures.empty() || surface->format == RenderFormat::D32_FLOAT)
+        return;
+    const GuestTexture* texture = *surface->destinationTextures.begin();
+    const bool viewportFull = g_viewport.x == 0.0f && g_viewport.y == 0.0f &&
+        g_viewport.width >= float(surface->width) && g_viewport.height >= float(surface->height);
+    const bool alphaTest = (g_pipelineState.specConstants & (SPEC_CONSTANT_ALPHA_TEST | SPEC_CONSTANT_ALPHA_TO_COVERAGE)) != 0;
+    const std::string key = fmt::format(
+        "{}x{} f{} dests={} destRT={} destMips={} sameShape={} | {}|{} | blend={} write={:X} z={}/{} alphaTest={} viewportFull={} scissor={} | {} type={} count={}",
+        surface->width, surface->height, int(surface->format), surface->destinationTextures.size(), texture->iosRenderTargetUsage,
+        texture->iosMipLevels, texture->width == surface->width && texture->height == surface->height && texture->format == surface->format,
+        g_pipelineState.vertexShader ? g_pipelineState.vertexShader->name : "-", g_pipelineState.pixelShader ? g_pipelineState.pixelShader->name : "-",
+        g_pipelineState.alphaBlendEnable, g_pipelineState.colorWriteEnable, g_pipelineState.zEnable, int(g_pipelineState.zFunc),
+        alphaTest, viewportFull, g_scissorTestEnable, g_iosCurrentDraw.kind, g_iosCurrentDraw.primitiveType, g_iosCurrentDraw.count);
+    ++g_iosDrawResolveKinds[key];
+    static uint32_t vertexReports;
+    if (g_iosCurrentDraw.vertices != nullptr && g_iosCurrentDraw.count <= 4 && vertexReports++ < 24)
+    {
+        std::string vertices;
+        for (uint32_t i = 0; i < g_iosCurrentDraw.count; i++)
+        {
+            const uint8_t* vertex = g_iosCurrentDraw.vertices + i * g_iosCurrentDraw.stride;
+            vertices += fmt::format(" ({:.3f},{:.3f},{:.3f},{:.3f})", IOSLoadGuestFloat(vertex), IOSLoadGuestFloat(vertex + 4),
+                g_iosCurrentDraw.stride >= 12 ? IOSLoadGuestFloat(vertex + 8) : 0.0f, g_iosCurrentDraw.stride >= 16 ? IOSLoadGuestFloat(vertex + 12) : 0.0f);
+        }
+        LOGFN("Draw-triggered resolve vertices: {}x{} {}|{} stride={} covers={} canSwap={} viewport=({},{} {}x{}):{}",
+            surface->width, surface->height, g_pipelineState.vertexShader ? g_pipelineState.vertexShader->name : "-",
+            g_pipelineState.pixelShader ? g_pipelineState.pixelShader->name : "-", g_iosCurrentDraw.stride,
+            IOSDrawCoversSurface(surface), IOSCanSwapResolve(surface, texture), g_viewport.x, g_viewport.y, g_viewport.width, g_viewport.height, vertices);
+    }
+}
+
+static void IOSReportResolveStats()
+{
+    static uint32_t frames;
+    if (!IOSResolveDiagnosticsEnabled() || ++frames % 120 != 0)
+        return;
+    for (uint8_t trigger = 1; trigger < IOSResolveTriggerCount; trigger++)
+    {
+        for (int large = 1; large >= 0; large--)
+        {
+            auto& stats = g_iosResolveStats[trigger][large];
+            LOGFN("Resolve copies: trigger={}, {}: copies/frame={:.2f}, Mpx/frame={:.2f}, readBeforeReplaced={}, replacedUnread={}",
+                g_iosResolveTriggerNames[trigger], large ? "large" : "small", stats.copies / 120.0, stats.pixels / 120.0 / 1e6, stats.read, stats.unread);
+            stats = {};
+        }
+    }
+    for (const auto& [key, count] : g_iosDrawResolveKinds)
+        LOGFN("Draw-triggered resolve: {:.2f}/frame: {}", count / 120.0, key);
+    g_iosDrawResolveKinds.clear();
+}
+
+// Only two aggregate records per 120 frames; no per-frame disk I/O.
+#include <os/signpost.h>
+#include <bitset>
+
+struct IOSFrameTimingSample
+{
+    using Clock = std::chrono::steady_clock;
+    bool enabled = IOSFrameDiagnosticsEnabled();
+    Clock::time_point begin{}, last{};
+    double phases[4]{};
+
+    IOSFrameTimingSample()
+    {
+        if (enabled) begin = last = Clock::now();
+    }
+
+    void Mark(size_t phase)
+    {
+        if (!enabled) return;
+        const auto now = Clock::now();
+        phases[phase] = std::chrono::duration<double, std::milli>(now - last).count();
+        last = now;
+    }
+
+    ~IOSFrameTimingSample()
+    {
+        if (!enabled) return;
+        static thread_local Clock::time_point previous{};
+        static thread_local uint32_t count = 0, late = 0;
+        static thread_local double intervalSum = 0.0, intervalMax = 0.0;
+        static thread_local double peak[4]{};
+        const double interval = std::chrono::duration<double, std::milli>(begin - previous).count();
+        previous = begin;
+        if (interval > 1000.0 || interval <= 0.0) return;
+        if (interval > 50.0)
+        {
+            // Point of interest for Instruments, so a hitch can be found exactly in a trace.
+            static os_log_t pointsOfInterest = os_log_create("io.github.unleashedrecomp", OS_LOG_CATEGORY_POINTS_OF_INTEREST);
+            os_signpost_event_emit(pointsOfInterest, OS_SIGNPOST_ID_EXCLUSIVE, "LongFrame", "%.1f ms", interval);
+            LOGFN("iOS long frame: {:.1f} ms (present phases: render-thread wait {:.1f}, fence {:.1f}, acquire {:.1f}, limiter {:.1f} ms)",
+                interval, phases[0], phases[1], phases[2], phases[3]);
+        }
+        ++count;
+        intervalSum += interval;
+        intervalMax = std::max(intervalMax, interval);
+        late += interval > 1.25 * (1000.0 / std::max(1, int(Config::FPS)));
+        for (size_t i = 0; i < 4; ++i) peak[i] = std::max(peak[i], phases[i]);
+        if (count < 120) return;
+        LOGFN("iOS CPU frame timing: n={}, mean={:.3f} ms, max={:.3f} ms, late={}, submitMax={:.3f} ms, fenceMax={:.3f} ms, acquireMax={:.3f} ms, limiterMax={:.3f} ms",
+            count, intervalSum / count, intervalMax, late, peak[0], peak[1], peak[2], peak[3]);
+        count = late = 0; intervalSum = intervalMax = 0.0;
+        for (double& value : peak) value = 0.0;
+    }
+};
+#endif
+
+void Video::Present() 
 {
     // Feeds the Android hang-watchdog (no-op elsewhere): if these stop, the log.txt
     // timestamp of the last ping marks when the app froze.
     os::logger::Heartbeat();
+
+#if defined(UNLEASHED_RECOMP_IOS)
+    app_lifecycle::GetExecutionGate().WaitUntilActive();
+    // Keep presentation at the configured cadence rather than the next 60 Hz
+    // refresh. The independent software timer alone can alternate 16/50 ms.
+    static const bool usePresentDuration = [] {
+        const char* value = std::getenv("UNLEASHED_IOS_PRESENT_DURATION");
+        return value == nullptr || value[0] != '0';
+    }();
+    // iOS never tears, so VSync off only selects the timer. Below 60 FPS that
+    // timer drifts against refreshes too; keep it for higher caps only.
+    const bool useMetalPacing = g_backend == Backend::METAL && usePresentDuration && (Config::VSync || Config::FPS < 60) &&
+        Config::FPS >= FPS_MIN && Config::FPS < FPS_MAX;
+    plume::setMetalPresentMinimumDuration(useMetalPacing ? 1.0 / Config::FPS : 0.0);
+    IOSFrameTimingSample frameTiming;
+#endif
+    static std::atomic<uint32_t> s_presentLogCount = 0;
+    const uint32_t presentLogIndex = s_presentLogCount.fetch_add(1);
+    const bool logPresent = presentLogIndex < 4;
+
+    if (logPresent)
+        LOGFN("Video::Present begin - index: {}, frame: {}, swapChainValid: {}", presentLogIndex, g_frame, g_swapChainValid);
 
     g_readyForCommands = false;
 
@@ -3089,8 +4022,18 @@ void Video::Present()
         g_shouldPrecompilePipelines = false;
     }
 
+    if (logPresent)
+        LOGFN("Video::Present waiting for command list - index: {}", presentLogIndex);
+
     g_executedCommandList.wait(false);
     g_executedCommandList = false;
+
+#if defined(UNLEASHED_RECOMP_IOS)
+    frameTiming.Mark(0);
+#endif
+
+    if (logPresent)
+        LOGFN("Video::Present command list completed - index: {}", presentLogIndex);
 
     if (g_swapChainValid)
     {
@@ -3102,6 +4045,9 @@ void Video::Present()
         }
 
         RenderCommandSemaphore* signalSemaphores[] = { g_renderSemaphores[g_frame].get() };
+        if (logPresent)
+            LOGFN("Video::Present presenting swapchain - index: {}, backBufferIndex: {}", presentLogIndex, g_backBufferIndex);
+
         g_swapChainValid = g_swapChain->present(g_backBufferIndex, signalSemaphores, std::size(signalSemaphores));
     }
 
@@ -3129,6 +4075,9 @@ void Video::Present()
     }
 
     g_dirtyStates = DirtyStates(true);
+#if defined(UNLEASHED_RECOMP_IOS)
+    frameTiming.Mark(1);
+#endif
     g_uploadAllocators[g_frame].reset();
     g_intermediaryUploadAllocator.reset();
     g_triangleFanIndexData.reset();
@@ -3136,10 +4085,20 @@ void Video::Present()
 
     CheckSwapChain();
 
+#if defined(UNLEASHED_RECOMP_IOS)
+    frameTiming.Mark(2);
+#endif
+
     cmd.type = RenderCommandType::BeginCommandList;
     g_renderQueue.enqueue(cmd);
 
-    if (Config::FPS >= FPS_MIN && Config::FPS < FPS_MAX)
+    bool useSoftwareLimiter = Config::FPS >= FPS_MIN && Config::FPS < FPS_MAX;
+#if defined(UNLEASHED_RECOMP_IOS)
+    // CAMetalLayer's drawable pool throttles the producer to the actual display
+    // cadence. A second unsynchronized timer periodically misses a refresh.
+    useSoftwareLimiter = useSoftwareLimiter && !useMetalPacing;
+#endif
+    if (useSoftwareLimiter)
     {
         using namespace std::chrono_literals;
 
@@ -3159,11 +4118,30 @@ void Video::Present()
             s_next = now;
         }
 
-        s_next += 1000000000ns / Config::FPS;
+        std::chrono::nanoseconds interval = 1000000000ns / Config::FPS;
+#if defined(UNLEASHED_RECOMP_IOS)
+        // iPhone panels run slightly off nominal (60.09 Hz measured on iPhone 15).
+        // An exact 1/FPS timer slowly falls behind and skips one refresh every
+        // few seconds; match the cap to whole real refreshes when it is close.
+        if (const double refresh = GetIOSDisplayRefreshInterval(); refresh > 0.0)
+        {
+            const double target = 1.0 / Config::FPS;
+            const double refreshes = std::max(1.0, std::round(target / refresh));
+            if (std::abs(refreshes * refresh - target) <= target * 0.02)
+                interval = std::chrono::nanoseconds(int64_t(refreshes * refresh * 1e9));
+        }
+#endif
+        s_next += interval;
     }
 
     g_presentProfiler.Reset();
 
+#if defined(UNLEASHED_RECOMP_IOS)
+    frameTiming.Mark(3);
+#endif
+
+    if (logPresent)
+        LOGFN("Video::Present end - index: {}, frame: {}, swapChainValid: {}", presentLogIndex, g_frame, g_swapChainValid);
 }
 
 void Video::StartPipelinePrecompilation()
@@ -3175,18 +4153,25 @@ static void SetRootDescriptor(const UploadAllocation& allocation, size_t index)
 {
     auto& commandList = g_commandLists[g_frame];
 
-    if (g_vulkan)
+    if (g_backend != Backend::D3D12)
         commandList->setGraphicsPushConstants(0, &allocation.deviceAddress, 8 * index, 8);
     else
         commandList->setGraphicsRootDescriptor(allocation.buffer->at(allocation.offset), index);
 }
 
 static void ProcExecuteCommandList(const RenderCommand& cmd)
-{    
+{
+#if defined(UNLEASHED_RECOMP_IOS)
+    ProcUpscaleIOSBackBuffer(); // Also covers frames with no host UI draw commands.
+#endif
     if (g_swapChainValid)
     {
         auto swapChainTexture = g_swapChain->getTexture(g_backBufferIndex);
-        if (g_backBuffer->texture == g_intermediaryBackBufferTexture.get())
+        if (g_backBuffer->texture == g_intermediaryBackBufferTexture.get()
+#if defined(UNLEASHED_RECOMP_IOS)
+            || (g_iosMetalFXScaled && g_backBuffer->texture == g_iosMetalFXOutput.get())
+#endif
+        )
         {
             struct
             {
@@ -3220,6 +4205,9 @@ static void ProcExecuteCommandList(const RenderCommand& cmd)
             constants.gammaG = 1.0f / std::clamp(constants.gammaG + offset, 0.1f, 4.0f);
             constants.gammaB = 1.0f / std::clamp(constants.gammaB + offset, 0.1f, 4.0f);
             constants.textureDescriptorIndex = g_intermediaryBackBufferTextureDescriptorIndex;
+#if defined(UNLEASHED_RECOMP_IOS)
+            if (g_iosMetalFXScaled) constants.textureDescriptorIndex = g_iosMetalFXOutputDescriptor;
+#endif
 
             constants.viewportOffsetX = (int32_t(g_swapChain->getWidth()) - int32_t(Video::s_viewportWidth)) / 2;
             constants.viewportOffsetY = (int32_t(g_swapChain->getHeight()) - int32_t(Video::s_viewportHeight)) / 2;
@@ -3237,7 +4225,7 @@ static void ProcExecuteCommandList(const RenderCommand& cmd)
 
             RenderTextureBarrier srcBarriers[] =
             {
-                RenderTextureBarrier(g_intermediaryBackBufferTexture.get(), RenderTextureLayout::SHADER_READ),
+                RenderTextureBarrier(g_backBuffer->texture, RenderTextureLayout::SHADER_READ),
                 RenderTextureBarrier(swapChainTexture, RenderTextureLayout::COLOR_WRITE)
             };
 
@@ -3245,6 +4233,9 @@ static void ProcExecuteCommandList(const RenderCommand& cmd)
             commandList->barriers(RenderBarrierStage::GRAPHICS, srcBarriers, std::size(srcBarriers));
             commandList->setGraphicsPipelineLayout(g_pipelineLayout.get());
             commandList->setPipeline(g_gammaCorrectionPipeline.get());
+#if defined(UNLEASHED_RECOMP_IOS)
+            IOSLabelNextPass("host|GammaCopy");
+#endif
             commandList->setGraphicsDescriptorSet(g_textureDescriptorSet.get(), 0);
             SetRootDescriptor(g_uploadAllocators[g_frame].allocate<false>(&constants, sizeof(constants), 0x100), 2);
             commandList->setFramebuffer(framebuffer.get());
@@ -3302,6 +4293,52 @@ static void ProcBeginCommandList(const RenderCommand& cmd)
 {
     DestructTempResources();
     BeginCommandList();
+}
+
+static void ProcTrimRuntimeCaches(const RenderCommand&)
+{
+    const size_t pipelinesBefore = g_pipelines.size();
+
+    // The current frame may already reference these pipelines. Metal command
+    // buffers use unretained references, and Vulkan also requires pipeline
+    // lifetime to cover submitted commands. Retire through the same frame
+    // fence mechanism as textures and buffers instead of freeing them here.
+    auto& retiredPipelines = g_tempPipelines[g_frame];
+    retiredPipelines.reserve(retiredPipelines.size() + pipelinesBefore);
+    for (auto& [hash, pipeline] : g_pipelines)
+        retiredPipelines.emplace_back(std::move(pipeline));
+
+    g_pipelines.clear();
+    g_dirtyStates.pipelineState = true;
+
+#ifdef PSO_CACHING
+    {
+        std::lock_guard lock(g_pipelineCacheMutex);
+        g_pipelineStatesToCache.clear();
+    }
+#endif
+
+    for (size_t i = 0; i < g_shaderCacheEntryCount; i++)
+    {
+        auto* shader = g_shaderCacheEntries[i].guestShader;
+        if (shader == nullptr)
+            continue;
+
+        std::lock_guard lock(shader->mutex);
+        shader->linkedShaders.clear();
+#ifdef UNLEASHED_RECOMP_D3D12
+        shader->shaderBlobs.clear();
+#endif
+    }
+
+    os::logger::Log(fmt::format("TrimRuntimeCaches - pipelines: {} -> 0", pipelinesBefore));
+}
+
+void Video::QueueTrimRuntimeCaches()
+{
+    RenderCommand cmd;
+    cmd.type = RenderCommandType::TrimRuntimeCaches;
+    g_renderQueue.enqueue(cmd);
 }
 
 static GuestSurface* GetBackBuffer() 
@@ -3412,6 +4449,10 @@ static GuestTexture* CreateTexture(uint32_t width, uint32_t height, uint32_t dep
 
     texture->textureHolder = g_device->createTexture(desc);
     texture->texture = texture->textureHolder.get();
+#if defined(UNLEASHED_RECOMP_IOS)
+    texture->iosRenderTargetUsage = (desc.flags & RenderTextureFlag::RENDER_TARGET) != 0;
+    texture->iosMipLevels = levels;
+#endif
 
     RenderTextureViewDesc viewDesc;
     viewDesc.format = desc.format;
@@ -3431,6 +4472,10 @@ static GuestTexture* CreateTexture(uint32_t width, uint32_t height, uint32_t dep
         viewDesc.componentMapping = RenderComponentMapping(RenderSwizzle::G, RenderSwizzle::B, RenderSwizzle::A, RenderSwizzle::ONE);
         break;
     }
+#if defined(UNLEASHED_RECOMP_IOS)
+    texture->iosPlainView = format != D3DFMT_D24FS8 && format != D3DFMT_D24S8 && format != D3DFMT_L8 &&
+        format != D3DFMT_L8_2 && format != D3DFMT_X8R8G8B8;
+#endif
 
     texture->textureView = texture->texture->createTextureView(viewDesc);
 
@@ -3522,9 +4567,32 @@ static void FlushViewport()
 {
     auto& commandList = g_commandLists[g_frame];
 
+#if defined(UNLEASHED_RECOMP_IOS)
+    // Scale only rasterization into the smaller final target. Guest surface
+    // dimensions and UI projection constants still describe the native viewport.
+    const bool scaledBackBuffer = g_iosMetalFXActive && !g_iosMetalFXScaled && g_renderTarget == g_backBuffer;
+    const float scaleX = scaledBackBuffer ? float(g_intermediaryBackBufferTextureWidth) / Video::s_viewportWidth : 1.0f;
+    const float scaleY = scaledBackBuffer ? float(g_intermediaryBackBufferTextureHeight) / Video::s_viewportHeight : 1.0f;
+#endif
+
     if (g_dirtyStates.viewport)
     {
         auto viewport = g_viewport;
+#if defined(UNLEASHED_RECOMP_IOS)
+        viewport.x *= scaleX; viewport.y *= scaleY;
+        viewport.width *= scaleX; viewport.height *= scaleY;
+        // Shift scene geometry/depth together; post-process full-screen quads and
+        // native UI remain unjittered. Shadows have their own, unmatched target.
+        if (g_iosTemporalActive && !g_iosMetalFXScaled && g_renderTarget && g_depthStencil &&
+            g_renderTarget != g_backBuffer && g_pipelineState.zEnable &&
+            g_renderTarget->width == g_intermediaryBackBufferTextureWidth &&
+            g_renderTarget->height == g_intermediaryBackBufferTextureHeight &&
+            g_depthStencil->width == g_intermediaryBackBufferTextureWidth &&
+            g_depthStencil->height == g_intermediaryBackBufferTextureHeight)
+        {
+            viewport.x -= g_iosJitterX; viewport.y -= g_iosJitterY;
+        }
+#endif
 
         if (viewport.minDepth > viewport.maxDepth)
             std::swap(viewport.minDepth, viewport.maxDepth);
@@ -3542,6 +4610,12 @@ static void FlushViewport()
             g_viewport.x + g_viewport.width,
             g_viewport.y + g_viewport.height);
 
+#if defined(UNLEASHED_RECOMP_IOS)
+        scissorRect.left = int32_t(std::floor(scissorRect.left * scaleX));
+        scissorRect.top = int32_t(std::floor(scissorRect.top * scaleY));
+        scissorRect.right = int32_t(std::ceil(scissorRect.right * scaleX));
+        scissorRect.bottom = int32_t(std::ceil(scissorRect.bottom * scaleY));
+#endif
         commandList->setScissors(scissorRect);
 
         g_dirtyStates.scissorRect = false;
@@ -3566,6 +4640,11 @@ static void ProcStretchRect(const RenderCommand& cmd)
 
     const bool isDepthStencil = (args.flags & 0x4) != 0;
     const auto surface = isDepthStencil ? g_depthStencil : g_renderTarget;
+
+#if defined(UNLEASHED_RECOMP_IOS)
+    IOSResolveConsumed(args.texture, false);
+    IOSFrameEndResolveOutcome(args.texture, false);
+#endif
 
     // Erase previous pending command so it doesn't cause the texture to be overriden.
     if (args.texture->sourceSurface != nullptr)
@@ -3632,6 +4711,13 @@ static void SetRenderTarget(GuestDevice* device, uint32_t index, GuestSurface* r
 static void ProcSetRenderTarget(const RenderCommand& cmd)
 {
     const auto& args = cmd.setRenderTarget;
+#if defined(UNLEASHED_RECOMP_IOS)
+    if (g_iosMetalFXActive && g_renderTarget != args.renderTarget)
+    {
+        g_dirtyStates.viewport = true;
+        g_dirtyStates.scissorRect = true;
+    }
+#endif
 
     SetDirtyValue(g_dirtyStates.renderTargetAndDepthStencil, g_renderTarget, args.renderTarget);
     SetDirtyValue(g_dirtyStates.pipelineState, g_pipelineState.renderTargetFormat, args.renderTarget != nullptr ? args.renderTarget->format : RenderFormat::UNKNOWN);
@@ -3673,12 +4759,9 @@ static bool PopulateBarriersForStretchRect(GuestSurface* renderTarget, GuestSurf
             RenderTextureLayout dstLayout;
             bool shaderResolve = true;
 
-            if (multiSampling && g_hardwareResolve)
+            if (multiSampling)
             {
-                // Hardware depth resolve is only supported on D3D12 when programmable sample positions are available.
-                bool hardwareDepthResolveAvailable = g_hardwareDepthResolve && !g_vulkan && g_capabilities.sampleLocations;
-
-                if (surface->format != RenderFormat::D32_FLOAT || hardwareDepthResolveAvailable)
+                if (surface->format != RenderFormat::D32_FLOAT || g_capabilities.resolveModes)
                 {
                     srcLayout = RenderTextureLayout::RESOLVE_SOURCE;
                     dstLayout = RenderTextureLayout::RESOLVE_DEST;
@@ -3717,12 +4800,15 @@ static void ExecutePendingStretchRectCommands(GuestSurface* renderTarget, GuestS
             for (const auto texture : surface->destinationTextures)
             {
                 bool shaderResolve = true;
+#if defined(UNLEASHED_RECOMP_IOS)
+                IOSResolveCopied(texture);
+                if (IOSSkipUnreadResolvesEnabled() && g_iosResolveTrigger == IOSResolvePresent)
+                    texture->iosFrameEndResolve = IOSFrameEndCopied;
+#endif
 
-                if (multiSampling && g_hardwareResolve)
+                if (multiSampling)
                 {
-                    bool hardwareDepthResolveAvailable = g_hardwareDepthResolve && !g_vulkan && g_capabilities.sampleLocations;
-
-                    if (surface->format != RenderFormat::D32_FLOAT || hardwareDepthResolveAvailable)
+                    if (surface->format != RenderFormat::D32_FLOAT || g_capabilities.resolveModes)
                     {
                         if (surface->format == RenderFormat::D32_FLOAT)
                             commandList->resolveTextureRegion(texture->texture, 0, 0, surface->texture, nullptr, RenderResolveMode::MIN);
@@ -3828,6 +4914,14 @@ static void ExecutePendingStretchRectCommands(GuestSurface* renderTarget, GuestS
                     }
 
                     commandList->setPipeline(pipeline);
+#if defined(UNLEASHED_RECOMP_IOS)
+                    if (IOSPassDiagnosticsEnabled())
+                    {
+                        const std::string label = fmt::format("host|{}@{}", pipeline == g_copyDepthPipeline.get() ? "ResolveCopyDepth" : "ResolveCopyColor",
+                            g_iosResolveTriggerNames[g_iosResolveTrigger]);
+                        IOSLabelNextPass(label.c_str());
+                    }
+#endif
                     commandList->setViewports(RenderViewport(0.0f, 0.0f, float(texture->width), float(texture->height), 0.0f, 1.0f));
                     commandList->setScissors(RenderRect(0, 0, texture->width, texture->height));
                     commandList->setGraphicsPushConstants(0, &surface->descriptorIndex, 0, sizeof(uint32_t));
@@ -3838,7 +4932,7 @@ static void ExecutePendingStretchRectCommands(GuestSurface* renderTarget, GuestS
                     g_dirtyStates.pipelineState = true;
                     g_dirtyStates.scissorRect = true;
 
-                    if (g_vulkan)
+                    if (g_backend != Backend::D3D12)
                     {
                         g_dirtyStates.vertexShaderConstants = true; // The push constant call invalidates vertex shader constants.
                         g_dirtyStates.depthBias = true; // Static depth bias in copy pipeline invalidates dynamic depth bias.
@@ -3862,6 +4956,48 @@ static void ExecutePendingStretchRectCommands(GuestSurface* renderTarget, GuestS
 
 static void ProcExecutePendingStretchRectCommands(const RenderCommand& cmd)
 {
+#if defined(UNLEASHED_RECOMP_IOS)
+    if (IOSSkipUnreadResolvesEnabled())
+    {
+        IOSLoadSampledResolveFormats();
+        std::vector<GuestTexture*> skipped;
+        for (const auto surface : g_pendingSurfaceCopies)
+        {
+            if (surface->format == RenderFormat::D32_FLOAT)
+                continue;
+            skipped.clear();
+            for (const auto texture : surface->destinationTextures)
+            {
+                if (!texture->iosAlwaysResolve && texture->iosUnreadResolveStreak >= IOS_UNREAD_RESOLVE_STREAK &&
+                    !g_iosSampledResolveFormats.test(IOSResolveKind(texture)))
+                    skipped.push_back(texture);
+            }
+            for (const auto texture : skipped)
+            {
+                surface->destinationTextures.erase(texture);
+                texture->sourceSurface = nullptr;
+                texture->iosFrameEndResolve = IOSFrameEndSkipped;
+                ++g_iosSkippedResolves;
+                g_iosSkippedResolvePixels += uint64_t(texture->width) * texture->height;
+                // Same as after a copy: slots that sampled the surface point back at the texture.
+                for (uint32_t i = 0; i < std::size(g_textures); i++)
+                {
+                    if (g_textures[i] == texture)
+                        SetTextureInRenderThread(i, texture);
+                }
+            }
+        }
+        static uint32_t frames;
+        if (++frames % 120 == 0)
+        {
+            LOGFN("Skipped unread end-of-frame resolves: {:.2f}/frame, {:.2f} Mpx/frame",
+                g_iosSkippedResolves / 120.0, g_iosSkippedResolvePixels / 120.0 / 1e6);
+            g_iosSkippedResolves = 0;
+            g_iosSkippedResolvePixels = 0;
+        }
+    }
+#endif
+
     bool foundAny = false;
 
     for (const auto surface : g_pendingSurfaceCopies)
@@ -3874,6 +5010,9 @@ static void ProcExecutePendingStretchRectCommands(const RenderCommand& cmd)
     if (foundAny)
     {
         FlushBarriers();
+#if defined(UNLEASHED_RECOMP_IOS)
+        g_iosResolveTrigger = IOSResolvePresent;
+#endif
 
         for (const auto surface : g_pendingSurfaceCopies)
         {
@@ -3889,6 +5028,20 @@ static void ProcExecutePendingStretchRectCommands(const RenderCommand& cmd)
 
     g_pendingSurfaceCopies.clear();
     g_pendingMsaaResolves.clear();
+#if defined(UNLEASHED_RECOMP_IOS)
+    IOSReportResolveStats();
+    if (IOSSwapResolvesEnabled())
+    {
+        static uint32_t frames;
+        if (++frames % 120 == 0)
+        {
+            LOGFN("Swapped resolves instead of copying: {:.2f}/frame, {:.2f} Mpx/frame",
+                g_iosSwappedResolves / 120.0, g_iosSwappedResolvePixels / 120.0 / 1e6);
+            g_iosSwappedResolves = 0;
+            g_iosSwappedResolvePixels = 0;
+        }
+    }
+#endif
 }
 
 static void SetFramebuffer(GuestSurface* renderTarget, GuestSurface* depthStencil, bool settingForClear)
@@ -3978,6 +5131,9 @@ static void ProcClear(const RenderCommand& cmd)
     if (PopulateBarriersForStretchRect(g_renderTarget, g_depthStencil))
     {
         FlushBarriers();
+#if defined(UNLEASHED_RECOMP_IOS)
+        g_iosResolveTrigger = IOSResolveClear;
+#endif
         ExecutePendingStretchRectCommands(g_renderTarget, g_depthStencil);
     }
 
@@ -4106,6 +5262,11 @@ static void ProcSetTexture(const RenderCommand& cmd)
 {
     const auto& args = cmd.setTexture;
 
+#if defined(UNLEASHED_RECOMP_IOS)
+    IOSResolveConsumed(args.texture, true);
+    IOSFrameEndResolveOutcome(args.texture, true);
+#endif
+
     // If a pending copy operation is detected, set the source surface. The indices will be fixed later if flushing is necessary.
     bool shouldSetTexture = true;
     if (args.texture != nullptr && args.texture->sourceSurface != nullptr)
@@ -4151,7 +5312,7 @@ static void ProcSetScissorRect(const RenderCommand& cmd)
 
 static RenderShader* GetOrLinkShader(GuestShader* guestShader, uint32_t specConstants)
 {
-    if (g_vulkan ||
+    if (g_backend != Backend::D3D12 ||
         guestShader->shaderCacheEntry == nullptr || 
         guestShader->shaderCacheEntry->specConstantsMask == 0)
     {
@@ -4161,7 +5322,8 @@ static RenderShader* GetOrLinkShader(GuestShader* guestShader, uint32_t specCons
         {
             assert(guestShader->shaderCacheEntry != nullptr);
 
-            if (g_vulkan)
+            switch (g_backend) {
+            case Backend::VULKAN:
             {
                 auto compressedSpirvData = g_shaderCache.get() + guestShader->shaderCacheEntry->spirvOffset;
 
@@ -4169,13 +5331,28 @@ static RenderShader* GetOrLinkShader(GuestShader* guestShader, uint32_t specCons
                 bool result = smolv::Decode(compressedSpirvData, guestShader->shaderCacheEntry->spirvSize, decoded.data(), decoded.size());
                 assert(result);
 
-                guestShader->shader = g_device->createShader(decoded.data(), decoded.size(), "main", RenderShaderFormat::SPIRV);
+                guestShader->shader = g_device->createShader(decoded.data(), decoded.size(), GUEST_SHADER_ENTRY, RenderShaderFormat::SPIRV);
+                break;
             }
-            else
+            case Backend::D3D12:
             {
-                guestShader->shader = g_device->createShader(g_shaderCache.get() + guestShader->shaderCacheEntry->dxilOffset, 
-                    guestShader->shaderCacheEntry->dxilSize, "main", RenderShaderFormat::DXIL);
+                guestShader->shader = g_device->createShader(g_shaderCache.get() + guestShader->shaderCacheEntry->dxilOffset,
+                    guestShader->shaderCacheEntry->dxilSize, GUEST_SHADER_ENTRY, RenderShaderFormat::DXIL);
+                break;
             }
+#ifdef UNLEASHED_RECOMP_METAL
+            case Backend::METAL:
+            {
+                guestShader->shader = g_device->createShader(g_shaderCache.get() + guestShader->shaderCacheEntry->airOffset,
+                    guestShader->shaderCacheEntry->airSize, GUEST_SHADER_ENTRY, RenderShaderFormat::METAL);
+                break;
+            }
+#endif
+            }
+
+#if defined(_DEBUG) && defined(UNLEASHED_RECOMP_XENOS_METAL)
+            guestShader->shader->setName(fmt::format("{}:{:x}", guestShader->shaderCacheEntry->filename, guestShader->shaderCacheEntry->hash));
+#endif
         }
 
         return guestShader->shader.get();
@@ -4279,7 +5456,7 @@ static RenderShader* GetOrLinkShader(GuestShader* guestShader, uint32_t specCons
         const wchar_t* libraryNames[] = { specConstantsLibName, shaderLibName };
 
         ComPtr<IDxcOperationResult> result;
-        HRESULT hr = s_dxcLinker->Link(L"main", guestShader->type == ResourceType::VertexShader ? L"vs_6_0" : L"ps_6_0",
+        HRESULT hr = s_dxcLinker->Link(L"" GUEST_SHADER_ENTRY, guestShader->type == ResourceType::VertexShader ? L"vs_6_0" : L"ps_6_0",
             libraryNames, std::size(libraryNames), nullptr, 0, result.GetAddressOf());
 
         assert(SUCCEEDED(hr) && result != nullptr);
@@ -4294,11 +5471,15 @@ static RenderShader* GetOrLinkShader(GuestShader* guestShader, uint32_t specCons
             auto& linkedShader = guestShader->linkedShaders[specConstants];
             if (linkedShader == nullptr)
             {
-                linkedShader = g_device->createShader(blob->GetBufferPointer(), blob->GetBufferSize(), "main", RenderShaderFormat::DXIL);
+                linkedShader = g_device->createShader(blob->GetBufferPointer(), blob->GetBufferSize(), GUEST_SHADER_ENTRY, RenderShaderFormat::DXIL);
                 guestShader->shaderBlobs.push_back(std::move(blob));
             }
 
             shader = linkedShader.get();
+
+#if defined(_DEBUG) && defined(UNLEASHED_RECOMP_XENOS_METAL)
+            shader->setName(fmt::format("{}:{:x}", guestShader->shaderCacheEntry->filename, guestShader->shaderCacheEntry->hash));
+#endif
         }        
     }
 #endif
@@ -4354,6 +5535,9 @@ static void SanitizePipelineState(PipelineState& pipelineState)
 
 static std::unique_ptr<RenderPipeline> CreateGraphicsPipeline(const PipelineState& pipelineState)
 {
+#if defined(UNLEASHED_RECOMP_IOS)
+    const auto pipelineStart = IOSFrameDiagnosticsEnabled() ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+#endif
 #ifdef ASYNC_PSO_DEBUG
     ++g_pipelinesCurrentlyCompiling;
 #endif
@@ -4422,6 +5606,17 @@ static std::unique_ptr<RenderPipeline> CreateGraphicsPipeline(const PipelineStat
     desc.inputSlotsCount = inputSlotCount;
     
     auto pipeline = g_device->createGraphicsPipeline(desc);
+
+#if defined(UNLEASHED_RECOMP_IOS)
+    if (IOSFrameDiagnosticsEnabled())
+    {
+        const double elapsed = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - pipelineStart).count();
+        static std::atomic<uint32_t> reported{0};
+        if (elapsed > 10.0 && reported.fetch_add(1) < 128)
+            LOGFN("iOS pipeline compile: {:.3f} ms, loading={}, state={:X}", elapsed,
+                bool(*SWA::SGlobals::ms_IsLoading), XXH3_64bits(&pipelineState, sizeof(pipelineState)));
+    }
+#endif
 
 #ifdef ASYNC_PSO_DEBUG
     --g_pipelinesCurrentlyCompiling;
@@ -4754,9 +5949,29 @@ static constexpr float COMMON_SLOPE_SCALED_DEPTH_BIAS_VALUE = 1.0f;
 
 static void FlushRenderStateForRenderThread()
 {
+#if defined(UNLEASHED_RECOMP_IOS)
+    IOSResolveCheckBoundTextures();
+    // Spatial retains its validated final-image path. Native CSD interception
+    // splits the final pass and regresses frame time on A16; reserve it for
+    // Temporal, where UI must be excluded from reconstruction history.
+    if (g_iosTemporalActive && !g_iosMetalFXScaled && g_renderTarget == g_backBuffer && g_pipelineState.vertexShader &&
+        (g_pipelineState.vertexShader == g_iosCsdVertexShader || g_pipelineState.vertexShader == g_iosCsdNoTexVertexShader))
+        ProcUpscaleIOSBackBuffer(); // CSD HUD/text follows the upscale at native size.
+#endif
     auto renderTarget = g_pipelineState.colorWriteEnable ? g_renderTarget : nullptr;
     auto depthStencil = g_pipelineState.zEnable ? g_depthStencil : nullptr;
 
+#if defined(UNLEASHED_RECOMP_IOS)
+    if (g_iosTemporalActive && renderTarget && depthStencil && renderTarget != g_backBuffer &&
+        renderTarget->width == g_intermediaryBackBufferTextureWidth && renderTarget->height == g_intermediaryBackBufferTextureHeight &&
+        depthStencil->width == g_intermediaryBackBufferTextureWidth && depthStencil->height == g_intermediaryBackBufferTextureHeight &&
+        depthStencil->sampleCount == RenderSampleCount::COUNT_1)
+        g_iosTemporalSceneDepth = depthStencil;
+#endif
+
+#if defined(UNLEASHED_RECOMP_IOS)
+    IOSTrySwapResolve(renderTarget);
+#endif
     bool foundAny = PopulateBarriersForStretchRect(renderTarget, depthStencil);
 
     for (const auto surface : g_pendingMsaaResolves)
@@ -4768,6 +5983,10 @@ static void FlushRenderStateForRenderThread()
     if (foundAny)
     {
         FlushBarriers();
+#if defined(UNLEASHED_RECOMP_IOS)
+        g_iosResolveTrigger = IOSResolveDraw;
+        IOSDescribeDrawResolve(renderTarget);
+#endif
         ExecutePendingStretchRectCommands(renderTarget, depthStencil);
 
         for (const auto surface : g_pendingMsaaResolves)
@@ -4785,6 +6004,23 @@ static void FlushRenderStateForRenderThread()
 
     FlushBarriers();
 
+#if defined(UNLEASHED_RECOMP_IOS)
+    if (g_iosTemporalActive && g_iosMotionBlurDraw && !g_iosTemporalInputsReady && g_textures[1] && g_iosTemporalSceneDepth)
+    {
+        auto boundTexture = [](GuestTexture* texture) -> const RenderTexture* {
+            if (texture->sourceSurface && texture->sourceSurface->sampleCount == RenderSampleCount::COUNT_1)
+                return texture->sourceSurface->texture;
+            return texture->texture;
+        };
+        // Motion blur uses half-resolution depth; Temporal needs the original,
+        // jittered scene depth. The packed half-resolution UV velocity is decoded
+        // and sampled at the Temporal input pixel centers by the Metal kernel.
+        AddBarrier(g_iosTemporalSceneDepth, RenderTextureLayout::SHADER_READ);
+        FlushBarriers();
+        g_iosTemporalInputsReady = plume::captureMetalTemporalInputs(g_commandLists[g_frame].get(),
+            boundTexture(g_textures[1]), g_iosTemporalSceneDepth->texture);
+    }
+#endif
     SetFramebuffer(renderTarget, depthStencil, false);
     FlushViewport();
 
@@ -4792,7 +6028,7 @@ static void FlushRenderStateForRenderThread()
 
     // D3D12 resets depth bias values to the pipeline values, even if they are dynamic.
     // We can reduce unnecessary calls by making common depth bias values part of the pipeline.
-    if (g_capabilities.dynamicDepthBias && !g_vulkan)
+    if (g_capabilities.dynamicDepthBias && g_backend == Backend::D3D12)
     {
         bool useDepthBias = (g_depthBias != 0) || (g_slopeScaledDepthBias != 0.0f);
 
@@ -4806,9 +6042,17 @@ static void FlushRenderStateForRenderThread()
     if (g_dirtyStates.pipelineState)
     {
         commandList->setPipeline(CreateGraphicsPipelineInRenderThread(g_pipelineState));
+#if defined(UNLEASHED_RECOMP_IOS)
+        if (IOSPassDiagnosticsEnabled())
+        {
+            const std::string label = fmt::format("{}|{}", g_pipelineState.vertexShader ? g_pipelineState.vertexShader->name : "-",
+                g_pipelineState.pixelShader ? g_pipelineState.pixelShader->name : "-");
+            IOSLabelNextPass(label.c_str());
+        }
+#endif
 
         // D3D12 resets the depth bias values. Check if they need to be set again.
-        if (g_capabilities.dynamicDepthBias && !g_vulkan)
+        if (g_capabilities.dynamicDepthBias && g_backend == Backend::D3D12)
             g_dirtyStates.depthBias = (g_depthBias != g_pipelineState.depthBias) || (g_slopeScaledDepthBias != g_pipelineState.slopeScaledDepthBias);
     }
 
@@ -4823,7 +6067,33 @@ static void FlushRenderStateForRenderThread()
 
     if (g_dirtyStates.pixelShaderConstants)
     {
-        auto pixelShaderConstants = g_uploadAllocators[g_frame].allocate<true>(g_pixelShaderConstants, sizeof(g_pixelShaderConstants), 0x100);
+        const uint32_t* constants = g_pixelShaderConstants;
+#if defined(UNLEASHED_RECOMP_IOS)
+        uint32_t temporalConstants[std::size(g_pixelShaderConstants)];
+        if (g_iosTemporalActive && g_iosObjectVelocityDraw)
+        {
+            std::memcpy(temporalConstants, constants, sizeof(temporalConstants));
+            static bool reported = false;
+            if (!reported)
+            {
+                uint32_t limitBits = __builtin_bswap32(constants[85*4+1]);
+                uint32_t cutoffBits = __builtin_bswap32(constants[85*4+2]);
+                float limit, cutoff;
+                std::memcpy(&limit, &limitBits, sizeof(limit)); std::memcpy(&cutoff, &cutoffBits, sizeof(cutoff));
+                char report[160]{};
+                std::snprintf(report, sizeof(report), "Temporal object velocity: original limit=%.6f, cutoff=%.6f; retaining full packed UV motion", limit, cutoff);
+                os::logger::Log(report);
+                reported = true;
+            }
+            // The motion-blur shader otherwise clips/culls motion needed for
+            // Temporal reprojection. Override this draw's upload only; leave the
+            // guest constants untouched and restore their buffer on shader changes.
+            temporalConstants[85*4+1] = 0x0000803F; // Big-endian float 1.0: packed signed UV range.
+            temporalConstants[85*4+2] = 0;
+            constants = temporalConstants;
+        }
+#endif
+        auto pixelShaderConstants = g_uploadAllocators[g_frame].allocate<true>(constants, sizeof(g_pixelShaderConstants), 0x100);
         SetRootDescriptor(pixelShaderConstants, 1);
     }
 
@@ -4842,7 +6112,7 @@ static void FlushRenderStateForRenderThread()
             g_inputSlots + g_dirtyStates.vertexStreamFirst);
     }
 
-    if (g_dirtyStates.indices && (!g_vulkan || g_indexBufferView.buffer.ref != nullptr))
+    if (g_dirtyStates.indices && (g_backend == Backend::D3D12 || g_indexBufferView.buffer.ref != nullptr))
         commandList->setIndexBuffer(&g_indexBufferView);
 
     g_dirtyStates = DirtyStates(false);
@@ -4923,6 +6193,9 @@ static void DrawPrimitive(GuestDevice* device, uint32_t primitiveType, uint32_t 
 static void ProcDrawPrimitive(const RenderCommand& cmd)
 {
     const auto& args = cmd.drawPrimitive;
+#if defined(UNLEASHED_RECOMP_IOS)
+    g_iosCurrentDraw = { "Draw", args.primitiveType, args.primitiveCount, nullptr, 0 };
+#endif
 
     SetPrimitiveType(args.primitiveType);
 
@@ -4966,6 +6239,9 @@ static void DrawIndexedPrimitive(GuestDevice* device, uint32_t primitiveType, in
 static void ProcDrawIndexedPrimitive(const RenderCommand& cmd)
 {
     const auto& args = cmd.drawIndexedPrimitive;
+#if defined(UNLEASHED_RECOMP_IOS)
+    g_iosCurrentDraw = { "DrawIndexed", args.primitiveType, args.primCount, nullptr, 0 };
+#endif
 
     uint32_t indexCount = CheckInstancing();
     if (indexCount > 0)
@@ -4997,6 +6273,9 @@ static void DrawPrimitiveUP(GuestDevice* device, uint32_t primitiveType, uint32_
 static void ProcDrawPrimitiveUP(const RenderCommand& cmd)
 {
     const auto& args = cmd.drawPrimitiveUP;
+#if defined(UNLEASHED_RECOMP_IOS)
+    g_iosCurrentDraw = { "DrawUP", args.primitiveType, args.primitiveCount, args.vertexStreamZeroData, args.vertexStreamZeroStride };
+#endif
 
     uint32_t indexCount = CheckInstancing();
     if (indexCount > 0)
@@ -5387,6 +6666,10 @@ static GuestShader* CreateShader(const be<uint32_t>* function, ResourceType reso
     else
         shader->AddRef();
 
+#if defined(UNLEASHED_RECOMP_IOS)
+    if (hash == 0xB1086A4947A797DE) g_iosCsdNoTexVertexShader = shader;
+    if (hash == 0xB4CAFC034A37C8A8) g_iosCsdVertexShader = shader;
+#endif
     if (hash == 0x31173204A896098A)
         g_csdShader = shader;
 
@@ -5474,6 +6757,13 @@ static void SetPixelShader(GuestDevice* device, GuestShader* shader)
 static void ProcSetPixelShader(const RenderCommand& cmd)
 {
     GuestShader* shader = cmd.setPixelShader.shader;
+#if defined(UNLEASHED_RECOMP_IOS)
+    g_iosMotionBlurDraw = shader && shader->shaderCacheEntry && shader->shaderCacheEntry->hash == 0x6B9732B4CD7E7740;
+    const bool objectVelocity = shader && shader->shaderCacheEntry && shader->shaderCacheEntry->hash == 0xBBDB735BEACC8F41;
+    if (g_iosTemporalActive && objectVelocity != g_iosObjectVelocityDraw)
+        g_dirtyStates.pixelShaderConstants = true;
+    g_iosObjectVelocityDraw = objectVelocity;
+#endif
     if (shader != nullptr && 
         shader->shaderCacheEntry != nullptr)
     {
@@ -5557,9 +6847,17 @@ static std::thread g_renderThread([]
         {
             size_t count = g_renderQueue.wait_dequeue_bulk(commands, std::size(commands));
 
+#if defined(UNLEASHED_RECOMP_IOS)
+            app_lifecycle::GetExecutionGate().WaitUntilActive();
+#endif
+
             for (size_t i = 0; i < count; i++)
             {
                 auto& cmd = commands[i];
+#if defined(UNLEASHED_RECOMP_IOS)
+                // Frame diagnostics: report single render commands that stall the render thread.
+                const auto commandStart = IOSFrameDiagnosticsEnabled() ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+#endif
                 switch (cmd.type)
                 {
                 case RenderCommandType::SetRenderState:                    ProcSetRenderState(cmd); break;
@@ -5591,8 +6889,23 @@ static std::thread g_renderThread([]
                 case RenderCommandType::SetStreamSource:                   ProcSetStreamSource(cmd); break;
                 case RenderCommandType::SetIndices:                        ProcSetIndices(cmd); break;
                 case RenderCommandType::SetPixelShader:                    ProcSetPixelShader(cmd); break;
+                case RenderCommandType::TrimRuntimeCaches:                 ProcTrimRuntimeCaches(cmd); break;
                 default:                                                   assert(false && "Unrecognized render command type."); break;
                 }
+#if defined(UNLEASHED_RECOMP_IOS)
+                if (IOSFrameDiagnosticsEnabled())
+                {
+                    static const char* const commandNames[] = { "SetRenderState", "DestructResource", "UnlockTextureRect", "UnlockBuffer16", "UnlockBuffer32", "DrawImGui", "ExecuteCommandList", "BeginCommandList", "StretchRect", "SetRenderTarget", "SetDepthStencilSurface", "ExecutePendingStretchRectCommands", "Clear", "SetViewport", "SetTexture", "SetScissorRect", "SetSamplerState", "SetBooleans", "SetVertexShaderConstants", "SetPixelShaderConstants", "AddPipeline", "DrawPrimitive", "DrawIndexedPrimitive", "DrawPrimitiveUP", "SetVertexDeclaration", "SetVertexShader", "SetStreamSource", "SetIndices", "SetPixelShader", "TrimRuntimeCaches" };
+                    const double elapsed = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - commandStart).count();
+                    if (elapsed > 15.0)
+                    {
+                        const size_t type = size_t(cmd.type);
+                        LOGFN("iOS slow render command: {} {:.1f} ms, pipeline {}|{}", type < std::size(commandNames) ? commandNames[type] : "?", elapsed,
+                            g_pipelineState.vertexShader ? g_pipelineState.vertexShader->name : "-",
+                            g_pipelineState.pixelShader ? g_pipelineState.pixelShader->name : "-");
+                    }
+                }
+#endif
             }
         }
     });
@@ -5914,6 +7227,7 @@ static RenderFormat ConvertDXGIFormat(ddspp::DXGIFormat format)
     case ddspp::BC7_UNORM_SRGB:
         return RenderFormat::BC7_UNORM_SRGB;
     default:
+        os::logger::Log(fmt::format("Unsupported DDS DXGI format: {}", int(format)));
         assert(false && "Unsupported format from DDS.");
         return RenderFormat::UNKNOWN;
     }
@@ -6163,11 +7477,20 @@ static bool GetBCnFallback(RenderFormat format, const uint8_t* data, size_t data
     }
 }
 
-static bool LoadTexture(GuestTexture& texture, const uint8_t* data, size_t dataSize, RenderComponentMapping componentMapping, bool forceCubeMap = false)
+static bool LoadTexture(GuestTexture& texture, const uint8_t* data, size_t dataSize, RenderComponentMapping componentMapping, bool forceCubeMap = false, std::string_view sourceName = {})
 {
     ddspp::Descriptor ddsDesc;
-    if (ddspp::decode_header((unsigned char *)(data), ddsDesc) != ddspp::Error)
+    if (DecodeDdsHeader(data, dataSize, ddsDesc))
     {
+        // Reject malformed or oversized DDS data before it reaches the upload math.
+        DdsUploadLayout validatedLayout;
+        const uint32_t maxSize = g_capabilities.maxTextureSize;
+        if (ddsDesc.width > maxSize || ddsDesc.height > maxSize || ddsDesc.depth > maxSize ||
+            !BuildDdsUploadLayout(ddsDesc, dataSize, PITCH_ALIGNMENT, PLACEMENT_ALIGNMENT, validatedLayout))
+        {
+            LOGF_WARNING("Invalid or unsupported DDS '{}' ({} bytes).", sourceName, dataSize);
+            return false;
+        }
         forceCubeMap &= (ddsDesc.type == ddspp::Texture2D) && (ddsDesc.arraySize == 1);
         uint32_t arraySize = ddsDesc.type == ddspp::TextureType::Cubemap ? (ddsDesc.arraySize * 6) : ddsDesc.arraySize;
 
@@ -6242,8 +7565,8 @@ static bool LoadTexture(GuestTexture& texture, const uint8_t* data, size_t dataS
             uint32_t width;
             uint32_t height;
             uint32_t depth;
-            uint32_t srcOffset;
-            uint32_t dstOffset;
+            size_t srcOffset;
+            size_t dstOffset;
             uint32_t srcRowPitch;
             uint32_t dstRowPitch;
             uint32_t rowCount;
@@ -6251,8 +7574,8 @@ static bool LoadTexture(GuestTexture& texture, const uint8_t* data, size_t dataS
         };
 
         std::vector<Slice> slices;
-        uint32_t curSrcOffset = 0;
-        uint32_t curDstOffset = 0;
+        size_t curSrcOffset = 0;
+        size_t curDstOffset = 0;
 
         for (uint32_t arraySlice = 0; arraySlice < arraySize; arraySlice++)
         {
@@ -6289,11 +7612,11 @@ static bool LoadTexture(GuestTexture& texture, const uint8_t* data, size_t dataS
 
                 // Source data always advances over every mip in the file; skipped
                 // top mips are simply never uploaded.
-                curSrcOffset += slice.srcRowPitch * slice.rowCount * slice.depth;
+                curSrcOffset += size_t(slice.srcRowPitch) * slice.rowCount * slice.depth;
                 if (mipSlice < mipSkip)
                     continue;
 
-                curDstOffset += (slice.dstRowPitch * slice.dstRowCount * slice.depth + PLACEMENT_ALIGNMENT - 1) & ~(PLACEMENT_ALIGNMENT - 1);
+                curDstOffset += (size_t(slice.dstRowPitch) * slice.dstRowCount * slice.depth + PLACEMENT_ALIGNMENT - 1) & ~(PLACEMENT_ALIGNMENT - 1);
                 slices.push_back(slice);
             }
         }
@@ -6355,7 +7678,7 @@ static bool LoadTexture(GuestTexture& texture, const uint8_t* data, size_t dataS
             }
             else if (slice.srcRowPitch == slice.dstRowPitch)
             {
-                memcpy(dstData, srcData, slice.srcRowPitch * slice.rowCount * slice.depth);
+                memcpy(dstData, srcData, size_t(slice.srcRowPitch) * slice.rowCount * slice.depth);
             }
             else
             {
@@ -6466,7 +7789,7 @@ std::unique_ptr<GuestTexture> LoadTexture(const uint8_t* data, size_t dataSize, 
 {
     GuestTexture texture(ResourceType::Texture);
 
-    if (LoadTexture(texture, data, dataSize, componentMapping))
+    if (LoadTexture(texture, data, dataSize, componentMapping, false, {}))
         return std::make_unique<GuestTexture>(std::move(texture));
 
     return nullptr;
@@ -6503,12 +7826,15 @@ static void MakePictureData(GuestPictureData* pictureData, uint8_t* data, uint32
 {
     if ((pictureData->flags & 0x1) == 0 && data != nullptr)
     {
+        const char* textureName = reinterpret_cast<char*>(g_memory.Translate(pictureData->name + 2));
+        std::string_view textureNameView = textureName != nullptr ? std::string_view(textureName) : std::string_view{};
+
         GuestTexture texture(ResourceType::Texture);
 
-        if (LoadTexture(texture, data, dataSize, {}))
+        if (LoadTexture(texture, data, dataSize, {}, false, textureNameView))
         {
 #ifdef _DEBUG
-            texture.texture->setName(reinterpret_cast<char*>(g_memory.Translate(pictureData->name + 2)));
+            texture.texture->setName(textureName);
 #endif
             XXH64_hash_t hash = XXH3_64bits(data, dataSize);
 
@@ -6518,7 +7844,7 @@ static void MakePictureData(GuestPictureData* pictureData, uint8_t* data, uint32
             if (forceCubeMap)
             {
                 GuestTexture recreatedCubeMapTexture(ResourceType::Texture);
-                if (LoadTexture(recreatedCubeMapTexture, data, dataSize, {}, true))
+                if (LoadTexture(recreatedCubeMapTexture, data, dataSize, {}, true, textureNameView))
                     texture.recreatedCubeMapTexture = std::make_unique<GuestTexture>(std::move(recreatedCubeMapTexture));
             }
 
@@ -6932,6 +8258,10 @@ static void PipelineCompilerThread()
         PipelineStateQueueItem queueItem;
         g_pipelineStateQueue.wait_dequeue(queueItem);
 
+#if defined(UNLEASHED_RECOMP_IOS)
+        app_lifecycle::GetExecutionGate().WaitUntilActive();
+#endif
+
         if (ctx == nullptr)
             ctx = std::make_unique<GuestThreadContext>(0);
 
@@ -7133,7 +8463,7 @@ static void CompileMeshPipeline(const Mesh& mesh, CompilationArgs& args)
         if (g_capabilities.dynamicDepthBias)
         {
             // Put common depth bias values for reducing unnecessary calls.
-            if (!g_vulkan)
+            if (g_backend == Backend::D3D12)
             {
                 pipelineState.depthBias = COMMON_DEPTH_BIAS_VALUE;
                 pipelineState.slopeScaledDepthBias = COMMON_SLOPE_SCALED_DEPTH_BIAS_VALUE;
@@ -7592,27 +8922,77 @@ static void CompileParticleMaterialPipeline(const Hedgehog::Sparkle::CParticleMa
     }
 }
 
-static std::thread::id g_mainThreadId = std::this_thread::get_id();
+static std::vector<uint16_t*> g_newIndicesToFree;
+
+static void FreePendingConvertedIndices()
+{
+    for (auto newIndicesToFree : g_newIndicesToFree)
+        g_userHeap.Free(newIndicesToFree);
+
+    g_newIndicesToFree.clear();
+}
 
 // SWA::CGameModeStage::ExitLoading
 PPC_FUNC_IMPL(__imp__sub_825369A0);
 PPC_FUNC(sub_825369A0)
 {
+#if !defined(__APPLE__) || !TARGET_OS_IPHONE
     assert(std::this_thread::get_id() == g_mainThreadId);
+#endif
 
     // Wait for pipeline compilations to finish.
+#if defined(__APPLE__) && TARGET_OS_IOS
+    const auto waitStart = std::chrono::steady_clock::now();
+    auto nextWaitLog = waitStart + std::chrono::seconds(5);
+    const uint32_t initialPendingCount = g_compilingPipelineTaskCount.load();
+    if (initialPendingCount != 0)
+    {
+        LOGFN("Pipeline loading wait started - remainingTasks: {}", initialPendingCount);
+        os::logger::LogRuntimeDiagnostics("Pipeline loading wait started");
+    }
+#endif
     uint32_t value;
     while ((value = g_compilingPipelineTaskCount.load()) != 0)
     {
+    #if !defined(__APPLE__) || !TARGET_OS_IPHONE
         // Pump SDL events to prevent the OS
         // from thinking the process is unresponsive.
         SDL_PumpEvents();
         SDL_FlushEvents(SDL_FIRSTEVENT, SDL_LASTEVENT);
+    #endif
 
+#if defined(__APPLE__) && TARGET_OS_IOS
+        // atomic::wait has no timeout and the task counter only notifies when
+        // it reaches zero. Keep returning to UIKit while Metal compiles a
+        // large stage; Xcode's debugger can mask the normal iOS watchdog.
+        const auto now = std::chrono::steady_clock::now();
+        if (now >= nextWaitLog)
+        {
+            LOGFN("Pipeline loading wait - elapsedMs: {}, remainingTasks: {}",
+                std::chrono::duration_cast<std::chrono::milliseconds>(now - waitStart).count(), value);
+            os::logger::LogRuntimeDiagnostics("Pipeline loading wait pending");
+            nextWaitLog = now + std::chrono::seconds(5);
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+#else
         g_compilingPipelineTaskCount.wait(value);
+#endif
     }
 
+#if defined(__APPLE__) && TARGET_OS_IOS
+    if (initialPendingCount != 0)
+    {
+        LOGFN("Pipeline loading wait completed - elapsedMs: {}, initialTasks: {}",
+            std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - waitStart).count(), initialPendingCount);
+        os::logger::LogRuntimeDiagnostics("Pipeline loading wait completed");
+    }
+#endif
+
     __imp__sub_825369A0(ctx, base);
+
+    // Safety net: converted strip indices can survive until stage transitions
+    // if their usual reset path does not run in this flow.
+    FreePendingConvertedIndices();
 }
 
 // CModelData::CheckMadeAll
@@ -7787,6 +9167,10 @@ static void PipelineTaskConsumerThread()
         while ((pendingPipelineTaskCount = g_pendingPipelineTaskCount.load()) == 0)
             g_pendingPipelineTaskCount.wait(pendingPipelineTaskCount);
 
+#if defined(UNLEASHED_RECOMP_IOS)
+        app_lifecycle::GetExecutionGate().WaitUntilActive();
+#endif
+
         if (ctx == nullptr)
             ctx = std::make_unique<GuestThreadContext>(0);
 
@@ -7894,8 +9278,8 @@ static void PipelineTaskConsumerThread()
                     if (!g_capabilities.triangleFan && pipelineState.primitiveTopology == RenderPrimitiveTopology::TRIANGLE_FAN)
                         pipelineState.primitiveTopology = RenderPrimitiveTopology::TRIANGLE_LIST;
 
-                    // Zero out depth bias for Vulkan, we only store common values for D3D12.
-                    if (g_capabilities.dynamicDepthBias && g_vulkan)
+                    // Zero out depth bias for Vulkan/Metal, we only store common values for D3D12.
+                    if (g_capabilities.dynamicDepthBias && g_backend != Backend::D3D12)
                     {
                         pipelineState.depthBias = 0;
                         pipelineState.slopeScaledDepthBias = 0.0f;
@@ -8030,7 +9414,7 @@ static void PipelineTaskConsumerThread()
 
 static std::thread g_pipelineTaskConsumerThread(PipelineTaskConsumerThread);
 
-#ifdef ASYNC_PSO_DEBUG
+#if defined(ASYNC_PSO_DEBUG) || defined(UNLEASHED_RECOMP_IOS)
 
 PPC_FUNC_IMPL(__imp__sub_82E33330);
 PPC_FUNC(sub_82E33330)
@@ -8313,8 +9697,6 @@ struct MeshResource
     be<uint32_t> indices;
 };
 
-static std::vector<uint16_t*> g_newIndicesToFree;
-
 // Hedgehog::Mirage::CMeshData::Make
 PPC_FUNC_IMPL(__imp__sub_82E44AF8);
 PPC_FUNC(sub_82E44AF8)
@@ -8364,11 +9746,7 @@ PPC_FUNC_IMPL(__imp__sub_82E250D0);
 PPC_FUNC(sub_82E250D0)
 {
     __imp__sub_82E250D0(ctx, base);
-
-    for (auto newIndicesToFree : g_newIndicesToFree)
-        g_userHeap.Free(newIndicesToFree);
-
-    g_newIndicesToFree.clear();
+    FreePendingConvertedIndices();
 }
 
 struct LightAndIndexBufferResourceV1

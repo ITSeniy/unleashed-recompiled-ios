@@ -17,10 +17,13 @@
 #include <user/paths.h>
 #include <user/persistent_storage_manager.h>
 #include <user/registry.h>
+#include <user/launch_request.h>
 #include <kernel/xdbf.h>
+#include <kernel/xex_load.h>
 #include <install/installer.h>
 #include <install/update_checker.h>
 #include <os/logger.h>
+#include <os/macos/ios_diagnostics.h>
 #include <os/process.h>
 #include <os/registry.h>
 #ifdef __ANDROID__
@@ -32,6 +35,11 @@
 #endif
 #include <mod/mod_loader.h>
 #include <preload_executable.h>
+#include <SDL.h>
+
+#if defined(UNLEASHED_RECOMP_IOS)
+#include <ui/ios_event_loop.h>
+#endif
 
 #ifdef _WIN32
 #include <timeapi.h>
@@ -68,11 +76,16 @@ void KiSystemStartup()
 {
     if (g_memory.base == nullptr)
     {
+        LOGFN_ERROR("Failed to initialize the 4 GiB guest memory space: stage {}, native error {}.",
+            g_memory.initializationFailureStage, g_memory.initializationNativeError);
         SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, GameWindow::GetTitle(), Localise("System_MemoryAllocationFailed").c_str(), GameWindow::s_pWindow);
         std::_Exit(1);
     }
 
+    LOGFN("Guest memory base: {}", static_cast<void*>(g_memory.base));
+    os::logger::LogRuntimeDiagnostics("guest heap initialization begin");
     g_userHeap.Init();
+    os::logger::LogRuntimeDiagnostics("guest heap initialization complete");
 
     const auto gameContent = XamMakeContent(XCONTENTTYPE_RESERVED, "Game");
     const auto updateContent = XamMakeContent(XCONTENTTYPE_RESERVED, "Update");
@@ -129,49 +142,40 @@ uint32_t LdrLoadModule(const std::filesystem::path &path)
     auto loadResult = LoadFile(path);
     if (loadResult.empty())
     {
-        assert("Failed to load module" && false);
+        LOGFN_ERROR("Failed to load module: {}", (const char*)path.u8string().c_str());
         return 0;
     }
 
-    auto* header = reinterpret_cast<const Xex2Header*>(loadResult.data());
-    auto* security = reinterpret_cast<const Xex2SecurityInfo*>(loadResult.data() + header->securityOffset);
-    const auto* fileFormatInfo = reinterpret_cast<const Xex2OptFileFormatInfo*>(getOptHeaderPtr(loadResult.data(), XEX_HEADER_FILE_FORMAT_INFO));
-    auto entry = *reinterpret_cast<const uint32_t*>(getOptHeaderPtr(loadResult.data(), XEX_HEADER_ENTRY_POINT));
-    ByteSwapInplace(entry);
-
-    auto srcData = loadResult.data() + header->headerSize;
-    auto destData = reinterpret_cast<uint8_t*>(g_memory.Translate(security->loadAddress));
-
-    if (fileFormatInfo->compressionType == XEX_COMPRESSION_NONE)
+    xex_load::Image image;
+    std::string_view error;
+    if (!xex_load::Validate(loadResult, PPC_MEMORY_SIZE, image, error, g_memory.guardPageSize))
     {
-        memcpy(destData, srcData, security->imageSize);
+        LOGFN_ERROR("Invalid module '{}': {}", (const char*)path.u8string().c_str(), error);
+        return 0;
     }
-    else if (fileFormatInfo->compressionType == XEX_COMPRESSION_BASIC)
-    {
-        auto* blocks = reinterpret_cast<const Xex2FileBasicCompressionBlock*>(fileFormatInfo + 1);
-        const size_t numBlocks = (fileFormatInfo->infoSize / sizeof(Xex2FileBasicCompressionInfo)) - 1;
 
-        for (size_t i = 0; i < numBlocks; i++)
-        {
-            memcpy(destData, srcData, blocks[i].dataSize);
-
-            srcData += blocks[i].dataSize;
-            destData += blocks[i].dataSize;
-
-            memset(destData, 0, blocks[i].zeroSize);
-            destData += blocks[i].zeroSize;
-        }
-    }
+    auto srcData = image.data.data();
+    auto destData = reinterpret_cast<uint8_t*>(g_memory.Translate(image.loadAddress));
+    if (image.basicBlocks.empty())
+        memcpy(destData, srcData, image.imageSize);
     else
     {
-        assert(false && "Unknown compression type.");
+        for (size_t offset = 0; offset < image.basicBlocks.size(); offset += sizeof(Xex2FileBasicCompressionBlock))
+        {
+            const auto block = xex_load::Read<Xex2FileBasicCompressionBlock>(image.basicBlocks, offset);
+            memcpy(destData, srcData, block.dataSize);
+
+            srcData += block.dataSize;
+            destData += block.dataSize;
+
+            memset(destData, 0, block.zeroSize);
+            destData += block.zeroSize;
+        }
     }
 
-    auto res = reinterpret_cast<const Xex2ResourceInfo*>(getOptHeaderPtr(loadResult.data(), XEX_HEADER_RESOURCE_INFO));
+    g_xdbfWrapper = XDBFWrapper((uint8_t*)g_memory.Translate(image.resourceAddress), image.resourceSize);
 
-    g_xdbfWrapper = XDBFWrapper((uint8_t*)g_memory.Translate(res->offset.get()), res->sizeOfData);
-
-    return entry;
+    return image.entryPoint;
 }
 
 #ifdef __x86_64__
@@ -205,10 +209,16 @@ int main(int argc, char *argv[])
 
     os::process::CheckConsole();
 
+    os::logger::Init();
+
+    // The reservation occurs during static initialization. Record its failure
+    // before renderer/installer startup can obscure a pre-existing VM limit.
+    if (g_memory.base == nullptr)
+        LOGFN_ERROR("Guest memory unavailable at process start: stage {}, native error {}.",
+            g_memory.initializationFailureStage, g_memory.initializationNativeError);
+
     if (!os::registry::Init())
         LOGN_WARNING("OS does not support registry.");
-
-    os::logger::Init();
 
     PreloadContext preloadContext;
     preloadContext.PreloadExecutable();
@@ -242,9 +252,27 @@ int main(int argc, char *argv[])
         // Set the current working directory to the executable's path.
         std::error_code ec;
         std::filesystem::current_path(os::process::GetExecutableRoot(), ec);
+        if (ec)
+            LOGFN_WARNING("Failed to set working directory: {}", ec.message());
     }
 
+    os::logger::LogRuntimeDiagnostics("configuration load begin");
     Config::Load();
+    os::logger::LogRuntimeDiagnostics("configuration load complete");
+
+#if defined(__APPLE__) && TARGET_OS_IPHONE
+    std::error_code launchError;
+    const auto nextAction = launch_request::Consume(GetUserPath(), launchError);
+    if (launchError)
+        LOGFN_WARNING("Could not consume next-launch action: {}", launchError.message());
+    forceInstaller = forceInstaller || nextAction == launch_request::Action::Install;
+    forceDLCInstaller = forceDLCInstaller || nextAction == launch_request::Action::InstallDLC;
+    if (nextAction != launch_request::Action::None)
+        LOGN("Applying saved iOS installer action for this launch.");
+#endif
+
+    LOGFN("Resolved user path: {}", (const char*)GetUserPath().u8string().c_str());
+    LOGFN("Resolved game path: {}", (const char*)GetGamePath().u8string().c_str());
 
     if (forceInstallationCheck)
     {
@@ -254,7 +282,7 @@ int main(int argc, char *argv[])
         Journal journal;
         double lastProgressMiB = 0.0;
         double lastTotalMib = 0.0;
-        Installer::checkInstallIntegrity(GAME_INSTALL_DIRECTORY, journal, [&]()
+        Installer::checkInstallIntegrity(GetGamePath(), journal, [&]()
         {
             constexpr double MiBDivisor = 1024.0 * 1024.0;
             constexpr double MiBProgressThreshold = 128.0;
@@ -327,7 +355,18 @@ int main(int argc, char *argv[])
     if (Config::ShowConsole)
         os::process::ShowConsole();
 
+    os::logger::LogRuntimeDiagnostics("host startup begin");
     HostStartup();
+    os::logger::LogRuntimeDiagnostics("host startup complete");
+
+    const std::filesystem::path gameRoot = GetGamePath();
+    const std::filesystem::path patchedExecutablePath = gameRoot / "patched" / "default.xex";
+    const std::filesystem::path updatePatchPath = gameRoot / "update" / "default.xexp";
+    const std::filesystem::path gameExecutablePath = gameRoot / "game" / "default.xex";
+    const bool hasPatchedExecutable = std::filesystem::exists(patchedExecutablePath);
+    const bool hasUpdatePatch = std::filesystem::exists(updatePatchPath);
+    const bool hasGameExecutable = std::filesystem::exists(gameExecutablePath);
+    LOGFN("Install files present - patched/default.xex: {}, update/default.xexp: {}, game/default.xex: {}", hasPatchedExecutable, hasUpdatePatch, hasGameExecutable);
 
     std::filesystem::path modulePath;
 
@@ -526,8 +565,9 @@ int main(int argc, char *argv[])
     }
 #endif
 
-    bool isGameInstalled = Installer::checkGameInstall(GetGamePath(), modulePath);
+    bool isGameInstalled = Installer::checkGameInstall(gameRoot, modulePath);
     bool runInstallerWizard = forceInstaller || forceDLCInstaller || !isGameInstalled;
+    LOGFN("Install state - gameInstalled: {}, runInstallerWizard: {}, candidateModulePath: {}", isGameInstalled, runInstallerWizard, (const char*)modulePath.u8string().c_str());
     if (runInstallerWizard)
     {
         if (!Video::CreateHostDevice(sdlVideoDriver, graphicsApiRetry))
@@ -540,6 +580,16 @@ int main(int argc, char *argv[])
         if (!InstallerWizard::Run(GetGamePath(), isGameInstalled && forceDLCInstaller))
         {
             std::_Exit(0);
+        }
+
+        os::logger::LogRuntimeDiagnostics("installer shutdown complete; graphics device retained");
+
+        isGameInstalled = Installer::checkGameInstall(gameRoot, modulePath);
+        LOGFN("Post-installer state - gameInstalled: {}, modulePath: {}", isGameInstalled, (const char*)modulePath.u8string().c_str());
+        if (!isGameInstalled)
+        {
+            SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, GameWindow::GetTitle(), "Install data is still incomplete after installer. Ensure game/update sources are selected and installation finishes.", GameWindow::s_pWindow);
+            std::_Exit(1);
         }
 #else
         // The GUI installer wizard is not built for Android. Tell the user where to put
@@ -555,14 +605,27 @@ int main(int argc, char *argv[])
 #endif
     }
 
+    os::logger::LogRuntimeDiagnostics("mod initialization begin");
     ModLoader::Init();
+    os::logger::LogRuntimeDiagnostics("mod initialization complete");
 
+    os::logger::LogRuntimeDiagnostics("persistent storage load begin");
     if (!PersistentStorageManager::LoadBinary())
         LOGFN_ERROR("Failed to load persistent storage binary... (status code {})", (int)PersistentStorageManager::BinStatus);
+    os::logger::LogRuntimeDiagnostics("persistent storage load complete");
 
+    LOGN("Starting guest system initialization.");
     KiSystemStartup();
+    os::logger::LogRuntimeDiagnostics("guest system initialization complete");
 
+    LOGFN("Loading module: {}", (const char*)modulePath.u8string().c_str());
     uint32_t entry = LdrLoadModule(modulePath);
+    os::logger::LogRuntimeDiagnostics("module load complete");
+    if (entry == 0)
+    {
+        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, GameWindow::GetTitle(), "Failed to load game executable (patched/default.xex). Re-run installer and verify game/update files.", GameWindow::s_pWindow);
+        std::_Exit(1);
+    }
 
     if (!runInstallerWizard)
     {
@@ -574,8 +637,28 @@ int main(int argc, char *argv[])
     }
 
     Video::StartPipelinePrecompilation();
+    os::logger::LogRuntimeDiagnostics("pipeline precompilation launched; entering guest");
 
+    LOGFN("Starting guest thread at entry: 0x{:08X}", entry);
+#if defined(UNLEASHED_RECOMP_IOS)
+    if (!StartIOSEventLoop())
+    {
+        LOGFN_ERROR("Failed to start the iOS event loop: {}", SDL_GetError());
+        std::_Exit(1);
+    }
+    LOGN("iOS main-thread event loop started.");
+
+    // Keep UIKit's main run loop available while the guest entry waits on guest synchronization objects.
+    static GuestThreadHandle* guestMainThread = nullptr;
+    guestMainThread = GuestThread::Start({ entry, 0, 0 }, nullptr);
+    if (guestMainThread == nullptr)
+    {
+        LOGN_ERROR("Failed to start the guest main thread.");
+        std::_Exit(1);
+    }
+#else
     GuestThread::Start({ entry, 0, 0 });
+#endif
 
     return 0;
 }

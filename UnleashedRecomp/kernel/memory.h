@@ -8,12 +8,19 @@
 struct Memory
 {
     uint8_t* base{};
+    size_t guardPageSize{};
+    // Initialization runs before logging is available. Retain native failures
+    // so startup can also report them in the persistent application log.
+    const char* initializationFailureStage{ "none" };
+    uint32_t initializationNativeError{};
 
     Memory();
 
     bool IsInMemoryRange(const void* host) const noexcept
     {
-        return host >= base && host < (base + PPC_MEMORY_SIZE);
+        const auto address = reinterpret_cast<uintptr_t>(host);
+        const auto start = reinterpret_cast<uintptr_t>(base);
+        return base != nullptr && address >= start && address - start < PPC_MEMORY_SIZE;
     }
 
     void* Translate(size_t offset) const noexcept
@@ -26,10 +33,12 @@ struct Memory
 
     uint32_t MapVirtual(const void* host) const noexcept
     {
-        if (host)
-            assert(IsInMemoryRange(host));
+        if (host == nullptr)
+            return 0;
 
-        return static_cast<uint32_t>(static_cast<const uint8_t*>(host) - base);
+        assert(IsInMemoryRange(host));
+
+        return static_cast<uint32_t>(reinterpret_cast<uintptr_t>(host) - reinterpret_cast<uintptr_t>(base));
     }
 
     PPCFunc* FindFunction(uint32_t guest) const noexcept

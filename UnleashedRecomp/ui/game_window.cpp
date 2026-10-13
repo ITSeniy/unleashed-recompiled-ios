@@ -4,8 +4,16 @@
 #include <os/user.h>
 #include <os/version.h>
 #include <app.h>
+#include <plume_apple.h>
 #include <sdl_listener.h>
 #include <SDL_syswm.h>
+#if defined(__APPLE__)
+#include <SDL_metal.h>
+#endif
+
+#if defined(__APPLE__)
+#include <TargetConditionals.h>
+#endif
 
 #if _WIN32
 #include <dwmapi.h>
@@ -17,6 +25,10 @@
 
 bool m_isFullscreenKeyReleased = true;
 bool m_isResizing = false;
+
+#if defined(__APPLE__)
+static SDL_MetalView s_metalView = nullptr;
+#endif
 
 int Window_OnSDLEvent(void*, SDL_Event* event)
 {
@@ -181,6 +193,32 @@ void GameWindow::Init(const char* sdlVideoDriver)
     SDL_SetHint(SDL_HINT_ORIENTATIONS, "LandscapeLeft LandscapeRight");
 #endif
 
+#if defined(__APPLE__) && TARGET_OS_IPHONE
+    LOGFN("GameWindow::Init - requested SDL video driver: {}", sdlVideoDriver ? sdlVideoDriver : "<default>");
+
+    if (sdlVideoDriver != nullptr)
+    {
+        SDL_SetHint(SDL_HINT_VIDEODRIVER, sdlVideoDriver);
+    }
+
+    const uint32_t requiredInitFlags = SDL_INIT_VIDEO | SDL_INIT_EVENTS;
+    const uint32_t initializedFlags = SDL_WasInit(requiredInitFlags);
+    if ((initializedFlags & requiredInitFlags) != requiredInitFlags)
+    {
+        if (SDL_Init(requiredInitFlags) != 0)
+        {
+            LOGF_ERROR("GameWindow::Init - SDL_Init(VIDEO|EVENTS) failed: {}", SDL_GetError());
+            return;
+        }
+    }
+
+    auto videoDriverName = SDL_GetCurrentVideoDriver();
+
+    if (videoDriverName)
+        LOGFN("SDL video driver: \"{}\"", videoDriverName);
+    else
+        LOGF_ERROR("GameWindow::Init - SDL_GetCurrentVideoDriver returned null: {}", SDL_GetError());
+#else
     if (SDL_VideoInit(sdlVideoDriver) != 0 && sdlVideoDriver)
     {
         LOGFN_ERROR("Failed to initialise the SDL video driver: \"{}\". Falling back to default.", sdlVideoDriver);
@@ -191,6 +229,7 @@ void GameWindow::Init(const char* sdlVideoDriver)
 
     if (videoDriverName)
         LOGFN("SDL video driver: \"{}\"", videoDriverName);
+#endif
 
     SDL_EventState(SDL_SYSWMEVENT, SDL_ENABLE);
     SDL_AddEventWatch(Window_OnSDLEvent, s_pWindow);
@@ -211,6 +250,12 @@ void GameWindow::Init(const char* sdlVideoDriver)
         GameWindow::ResetDimensions();
 
     s_pWindow = SDL_CreateWindow("Unleashed Recompiled", s_x, s_y, s_width, s_height, GetWindowFlags());
+    if (s_pWindow == nullptr)
+    {
+        LOGF_ERROR("GameWindow::Init - SDL_CreateWindow failed: {}", SDL_GetError());
+        return;
+    }
+    LOGFN("GameWindow::Init - SDL_CreateWindow succeeded: {}x{}", s_width, s_height);
 
     if (IsFullscreen())
         SDL_ShowCursor(SDL_DISABLE);
@@ -223,7 +268,9 @@ void GameWindow::Init(const char* sdlVideoDriver)
 
     SDL_SysWMinfo info;
     SDL_VERSION(&info.version);
-    SDL_GetWindowWMInfo(s_pWindow, &info);
+    const SDL_bool hasInitialWMInfo = SDL_GetWindowWMInfo(s_pWindow, &info);
+    if (hasInitialWMInfo == SDL_FALSE)
+        LOGF_ERROR("GameWindow::Init - initial SDL_GetWindowWMInfo failed: {}", SDL_GetError());
 
 #if defined(_WIN32)
     s_renderWindow = info.info.win.window;
@@ -240,8 +287,97 @@ void GameWindow::Init(const char* sdlVideoDriver)
 #elif defined(__linux__)
     s_renderWindow = { info.info.x11.display, info.info.x11.window };
 #elif defined(__APPLE__)
+#if defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE
+    s_renderWindow.window = info.info.uikit.window;
+#else
     s_renderWindow.window = info.info.cocoa.window;
-    s_renderWindow.view = SDL_Metal_GetLayer(SDL_Metal_CreateView(s_pWindow));
+#endif
+    SDL_ShowWindow(s_pWindow);
+
+#if defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE
+    // On iOS, SDL_SysWMinfo can report a null UIKit window briefly after show.
+    // Refresh it during layer acquisition retries.
+    uint32_t wmInfoFailures = 0;
+    for (int retry = 0; retry < 120 && s_renderWindow.window == nullptr; retry++)
+    {
+        SDL_SysWMinfo retryInfo;
+        SDL_VERSION(&retryInfo.version);
+        if (SDL_GetWindowWMInfo(s_pWindow, &retryInfo))
+            s_renderWindow.window = retryInfo.info.uikit.window;
+        else
+            wmInfoFailures++;
+
+        if (s_renderWindow.window == nullptr)
+        {
+            SDL_PumpEvents();
+            SDL_Delay(8);
+        }
+    }
+
+    LOGFN("GameWindow::Init - iOS UIWindow from WMInfo: {} (wmInfoFailures={})", s_renderWindow.window ? "yes" : "no", wmInfoFailures);
+#endif
+
+    void* metalLayer = nullptr;
+    uint32_t metalCreateFailures = 0;
+    uint32_t metalLayerFailures = 0;
+    for (int retry = 0; retry < 120 && metalLayer == nullptr; retry++)
+    {
+#if defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE
+        // Re-poll WM info while we try to bootstrap the SDL Metal view.
+        if (s_renderWindow.window == nullptr)
+        {
+            SDL_SysWMinfo retryInfo;
+            SDL_VERSION(&retryInfo.version);
+            if (SDL_GetWindowWMInfo(s_pWindow, &retryInfo))
+                s_renderWindow.window = retryInfo.info.uikit.window;
+        }
+#endif
+
+        // Recreate the view periodically if layer acquisition keeps returning null.
+        if (s_metalView == nullptr || (retry > 0 && (retry % 20) == 0))
+        {
+            if (s_metalView != nullptr)
+                SDL_Metal_DestroyView(s_metalView);
+
+            s_metalView = SDL_Metal_CreateView(s_pWindow);
+            if (s_metalView == nullptr)
+                metalCreateFailures++;
+        }
+
+        if (s_metalView != nullptr)
+        {
+            metalLayer = SDL_Metal_GetLayer(s_metalView);
+            if (metalLayer == nullptr)
+                metalLayerFailures++;
+        }
+
+        if (metalLayer == nullptr)
+        {
+            SDL_PumpEvents();
+            SDL_Delay(8);
+        }
+    }
+
+    s_renderWindow.view = metalLayer;
+
+    LOGFN("GameWindow::Init - SDL metal bootstrap: view={}, layer={}, createFailures={}, getLayerNulls={}, lastError={}",
+        s_metalView ? "yes" : "no",
+        s_renderWindow.view ? "yes" : "no",
+        metalCreateFailures,
+        metalLayerFailures,
+        SDL_GetError());
+
+    if (s_renderWindow.view == nullptr)
+        s_renderWindow.view = plume::ensureMetalLayerForIOSWindow(s_renderWindow.window);
+
+    if (s_renderWindow.view == nullptr)
+        s_renderWindow.view = plume::ensureMetalLayerForIOSWindow(nullptr);
+
+    if (s_renderWindow.view != nullptr)
+        os::logger::Log("GameWindow::Init - metal layer ready");
+
+    if (s_renderWindow.view == nullptr)
+        os::logger::Log("GameWindow::Init - SDL_Metal_GetLayer returned null after retries");
 #else
     static_assert(false, "Unknown platform.");
 #endif

@@ -4,6 +4,7 @@
 #include <kernel/heap.h>
 #include <os/logger.h>
 #include <ui/game_window.h>
+#include <os/app_lifecycle.h>
 #include <user/config.h>
 
 #ifdef __ANDROID__
@@ -41,12 +42,20 @@ extern "C" int Android_JNI_RouteAudioOutput(int device_id);
 // the device looks dead (no consumption for DEVICE_DEAD_NANOS), in which case frames are
 // rendered and dropped so the engine clock survives a dead platform stream.
 // ============================================================================================
+#if defined(UNLEASHED_RECOMP_IOS)
+// iOS keeps the original push model (validated on device): CoreAudio and the app's
+// execution gate pause it on deactivation via XAudioSetAppActive.
+#define APU_PULL_MODEL 0
+#else
 #define APU_PULL_MODEL 1
+#endif
 
 static PPCFunc* g_clientCallback{};
 static uint32_t g_clientCallbackParam{}; // pointer in guest memory
 static SDL_AudioDeviceID g_audioDevice{};
 static bool g_downMixToStereo;
+static std::mutex g_audioDeviceMutex;
+static bool g_audioAppActive = true;
 
 #if APU_PULL_MODEL
 
@@ -630,6 +639,9 @@ static void AudioThread()
 
 static void CreateAudioDevice()
 {
+#if !APU_PULL_MODEL
+    std::lock_guard lock(g_audioDeviceMutex);
+#else
     std::vector<uint8_t> savedFifo;
     size_t savedFifoHead = 0;
     size_t savedFifoUsed = 0;
@@ -643,6 +655,7 @@ static void CreateAudioDevice()
         savedFifoUsed = g_fifoUsed;
         savedFifo = g_fifo;
     }
+#endif
 
     if (g_audioDevice != NULL)
         SDL_CloseAudioDevice(g_audioDevice);
@@ -745,7 +758,9 @@ void XAudioInitializeSystem()
     SDL_SetHint(SDL_HINT_AUDIO_CATEGORY, "playback");
     SDL_SetHint(SDL_HINT_AUDIO_DEVICE_APP_NAME, "Unleashed Recompiled");
 
+#if APU_PULL_MODEL
     g_audioPresetSettings = ResolveAudioPresetSettings();
+#endif
 #ifdef __ANDROID__
     SDL_SetHint("UNLEASHED_AAUDIO_LOW_LATENCY", g_audioPresetSettings.useAAudioLowLatency ? "1" : "0");
 #endif
@@ -758,6 +773,7 @@ void XAudioInitializeSystem()
 
     LOGF("SDL audio driver: \"{}\".", SDL_GetCurrentAudioDriver());
 
+#if APU_PULL_MODEL
     LOGF("Audio preset: {} (device samples {}, cushion {} frames / {} ms, route prefill {} frames, AAudio low latency {}).",
         g_audioPresetSettings.name, g_audioPresetSettings.deviceSamples,
         g_audioPresetSettings.cushionFrames,
@@ -765,7 +781,6 @@ void XAudioInitializeSystem()
         g_audioPresetSettings.routePrefillFrames,
         g_audioPresetSettings.useAAudioLowLatency ? "on" : "off");
 
-#if APU_PULL_MODEL
     g_audioSystemInitTime.store(MonotonicNanos(), std::memory_order_relaxed);
     SDL_EventState(SDL_AUDIODEVICEADDED, SDL_ENABLE);
     SDL_EventState(SDL_AUDIODEVICEREMOVED, SDL_ENABLE);
@@ -795,7 +810,14 @@ static void AudioThread()
 
     while (!g_audioThreadShouldExit)
     {
-        uint32_t queuedAudioSize = SDL_GetQueuedAudioSize(g_audioDevice);
+#if defined(UNLEASHED_RECOMP_IOS)
+        app_lifecycle::GetExecutionGate().WaitUntilActive();
+#endif
+        uint32_t queuedAudioSize;
+        {
+            std::lock_guard lock(g_audioDeviceMutex);
+            queuedAudioSize = SDL_GetQueuedAudioSize(g_audioDevice);
+        }
         constexpr size_t MAX_LATENCY = 10;
         const size_t callbackAudioSize = channels * XAUDIO_NUM_SAMPLES * sizeof(float);
 
@@ -820,11 +842,18 @@ static void AudioThread()
 
 static void CreateAudioThread()
 {
+#if APU_PULL_MODEL
     if (!g_deferUnpauseUntilPrefilled.load(std::memory_order_relaxed) &&
         !g_appInBackground.load(std::memory_order_relaxed))
     {
         SDL_PauseAudioDevice(g_audioDevice, 0);
     }
+#else
+    {
+        std::lock_guard lock(g_audioDeviceMutex);
+        SDL_PauseAudioDevice(g_audioDevice, !g_audioAppActive);
+    }
+#endif
     g_audioThreadShouldExit = false;
     g_audioThread = std::make_unique<std::thread>(AudioThread);
 }
@@ -838,6 +867,26 @@ void XAudioRegisterClient(PPCFunc* callback, uint32_t param)
     g_clientCallback = callback;
 
     CreateAudioThread();
+}
+
+void XAudioSetAppActive(bool active)
+{
+    std::lock_guard lock(g_audioDeviceMutex);
+    g_audioAppActive = active;
+    if (g_audioDevice)
+    {
+        SDL_PauseAudioDevice(g_audioDevice, !active);
+        SDL_ClearQueuedAudio(g_audioDevice);
+    }
+}
+
+static void QueueAudioFrames(const void* samples, size_t size)
+{
+    std::lock_guard lock(g_audioDeviceMutex);
+    // A callback already in progress may finish after deactivation. Do not
+    // leave its output queued to play on the next foreground activation.
+    if (g_audioAppActive)
+        SDL_QueueAudio(g_audioDevice, samples, static_cast<uint32_t>(size));
 }
 
 void XAudioSubmitFrame(void* samples)
@@ -876,7 +925,7 @@ void XAudioSubmitFrame(void* samples)
         // else: device stalled and the ring is full - drop the frame, the clock matters more.
         SDL_UnlockAudioDevice(g_audioDevice);
 #else
-        SDL_QueueAudio(g_audioDevice, &audioFrames, sizeof(audioFrames));
+        QueueAudioFrames(&audioFrames, sizeof(audioFrames));
 #endif
     }
     else
@@ -896,7 +945,7 @@ void XAudioSubmitFrame(void* samples)
             FifoWrite(reinterpret_cast<const uint8_t*>(audioFrames.data()), sizeof(audioFrames));
         SDL_UnlockAudioDevice(g_audioDevice);
 #else
-        SDL_QueueAudio(g_audioDevice, &audioFrames, sizeof(audioFrames));
+        QueueAudioFrames(&audioFrames, sizeof(audioFrames));
 #endif
     }
 }

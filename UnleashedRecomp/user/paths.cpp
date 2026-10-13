@@ -1,11 +1,25 @@
 #include "paths.h"
 #include <os/process.h>
+#if defined(__APPLE__)
+#include <TargetConditionals.h>
+#include <SDL.h>
+#endif
+#if defined(__linux__) || defined(__APPLE__)
+#include <pwd.h>
+#include <unistd.h>
+#endif
 
 std::filesystem::path g_executableRoot = os::process::GetExecutableRoot();
 
 bool CheckPortable()
 {
-    return std::filesystem::exists(g_executableRoot / "portable.txt");
+#if defined(__APPLE__) && TARGET_OS_IPHONE
+    // App bundles and their parent containers are signed and read-only on iOS.
+    return false;
+#else
+    std::error_code ec;
+    return std::filesystem::exists(g_executableRoot / "portable.txt", ec);
+#endif
 }
 
 std::filesystem::path BuildUserPath()
@@ -27,15 +41,26 @@ std::filesystem::path BuildUserPath()
     // (legacy internal install or external app storage, whichever GetDataRoot picked).
     userPath = os::android::GetDataRoot() / ".config" / USER_DIRECTORY;
 #elif defined(__linux__) || defined(__APPLE__)
+#if defined(__APPLE__) && TARGET_OS_IPHONE
     const char* homeDir = getenv("HOME");
-#if defined(__linux__)
+    if (homeDir != nullptr && *homeDir != '\0')
+    {
+        userPath = std::filesystem::path(homeDir) / "Documents" / USER_DIRECTORY;
+    }
+    else if (char* prefPath = SDL_GetPrefPath("hedge_dev", USER_DIRECTORY); prefPath != nullptr)
+    {
+        userPath = prefPath;
+        SDL_free(prefPath);
+    }
+#else
+    const char* homeDir = getenv("HOME");
     if (homeDir == nullptr)
     {
-        homeDir = getpwuid(getuid())->pw_dir;
+        if (const passwd* pw = getpwuid(getuid()); pw != nullptr)
+            homeDir = pw->pw_dir;
     }
-#endif
 
-    if (homeDir != nullptr)
+    if (userPath.empty() && homeDir != nullptr)
     {
         // Prefer to store in the .config directory if it exists. Use the home directory otherwise.
         std::filesystem::path homePath = homeDir;
@@ -44,10 +69,20 @@ std::filesystem::path BuildUserPath()
 #else
         std::filesystem::path configPath = homePath / "Library" / "Application Support";
 #endif
-        if (std::filesystem::exists(configPath))
+        std::error_code ec;
+        if (std::filesystem::exists(configPath, ec))
             userPath = configPath / USER_DIRECTORY;
         else
             userPath = homePath / ("." USER_DIRECTORY);
+    }
+#endif
+
+    if (userPath.empty())
+    {
+        std::error_code ec;
+        const auto tempPath = std::filesystem::temp_directory_path(ec);
+        if (!ec)
+            userPath = tempPath / USER_DIRECTORY;
     }
 #else
     static_assert(false, "GetUserPath() not implemented for this platform.");

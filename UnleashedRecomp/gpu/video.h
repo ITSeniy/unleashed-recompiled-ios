@@ -25,6 +25,13 @@ struct Video
     static void StartPipelinePrecompilation();
     static void WaitForGPU();
     static void ComputeViewportDimensions();
+    static void QueueTrimRuntimeCaches();
+};
+
+enum class Backend {
+    VULKAN,
+    D3D12,
+    METAL
 };
 
 struct GuestSamplerState
@@ -161,6 +168,16 @@ struct GuestTexture : GuestBaseTexture
     std::unique_ptr<GuestTexture> patchedTexture;
     std::unique_ptr<GuestTexture> recreatedCubeMapTexture;
     struct GuestSurface* sourceSurface = nullptr;
+#if defined(UNLEASHED_RECOMP_IOS)
+    uint8_t iosResolveTrigger = 0; // Resolve diagnostics: why the last copy ran, until it is read.
+    // Skipping end-of-frame resolves that are always replaced unread (experimental).
+    uint8_t iosFrameEndResolve = 0; // 1 = copied at frame end, 2 = skipped; until read or re-resolved.
+    uint8_t iosUnreadResolveStreak = 0;
+    bool iosAlwaysResolve = false; // Set after a skipped resolve was read.
+    bool iosRenderTargetUsage = false; // Created with a usage that allows rendering into it.
+    bool iosPlainView = true; // Its shader view has no component swizzle.
+    uint32_t iosMipLevels = 1;
+#endif
 };
 
 struct GuestLockedRect
@@ -293,7 +310,8 @@ struct GuestShader : GuestResource
     std::vector<ComPtr<IDxcBlob>> shaderBlobs;
     ComPtr<IDxcBlobEncoding> libraryBlob;
 #endif
-#ifdef ASYNC_PSO_DEBUG
+#if defined(ASYNC_PSO_DEBUG) || defined(UNLEASHED_RECOMP_IOS)
+    // Guest shader name (e.g. for pass diagnostics); points into guest memory.
     const char* name = "<unknown>";
 #endif
 };
