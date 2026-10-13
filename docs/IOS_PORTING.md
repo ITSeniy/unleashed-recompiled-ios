@@ -1061,7 +1061,7 @@ minimum-duration presentation and was already clean.
 
 ## MetalFX Upscaling menu setting (2026-10-13)
 
-Spatial is now a regular iOS option: Graphics → **MetalFX Upscaling**, directly
+Spatial is now a regular iOS option: Video → **MetalFX Upscaling**, directly
 below Resolution Scale (`MetalFXUpscaling` in `[Video]`, default On). The iOS
 default `ResolutionScale` changed from 0.5 to 0.6, the input scale that held
 60 FPS in the sustained Spatial test. Existing configs keep their saved scale.
@@ -1413,7 +1413,7 @@ comfortably inside it. Log: `out/ios/iphone15-spatial075-ab.log`.
 
 ## Resolve optimizations on by default; Spatial default 0.66× (2026-10-13)
 
-Both optimizations are now Graphics settings below MetalFX Upscaling, default On
+Both optimizations are now Video settings below MetalFX Upscaling, default On
 and read every frame: **Skip Unused Copies** (`SkipUnusedCopies`, option A) and
 **Reuse Render Targets** (`ReuseRenderTargets`, option B). The descriptions ask
 users to turn them off if flickering/stale areas or corrupted post-processing

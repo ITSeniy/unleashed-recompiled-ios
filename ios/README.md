@@ -98,7 +98,7 @@ See the ongoing 1.0-scale measurements in [IOS_PORTING.md](../docs/IOS_PORTING.m
 
 ### MetalFX Spatial
 
-Graphics → **MetalFX Upscaling** (`MetalFXUpscaling`, default On) upscales
+Video → **MetalFX Upscaling** (`MetalFXUpscaling`, default On) upscales
 with Spatial whenever ResolutionScale is below 1.0, and the iOS default
 ResolutionScale is now 0.66. Toggling applies on the next frame without a restart.
 

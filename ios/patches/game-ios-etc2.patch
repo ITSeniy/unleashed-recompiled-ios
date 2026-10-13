@@ -436,7 +436,7 @@ diff --git a/UnleashedRecomp/gpu/video.cpp b/UnleashedRecomp/gpu/video.cpp
 +// Textures stay bound across draws, so also count a read when a draw samples a bound slot.
 +static void IOSResolveCheckBoundTextures();
 +
-+// Graphics → Skip Unused Copies (UNLEASHED_IOS_SKIP_UNREAD_RESOLVES=0/1): the end-of-frame flush copies
++// Video → Skip Unused Copies (UNLEASHED_IOS_SKIP_UNREAD_RESOLVES=0/1): the end-of-frame flush copies
 +// every pending resolve, but some textures are always resolved again before anything
 +// samples them. After a streak of such frames their flush copy is skipped. If a skipped
 +// texture is ever sampled, it is logged and always copied from then on.
@@ -534,7 +534,7 @@ diff --git a/UnleashedRecomp/gpu/video.cpp b/UnleashedRecomp/gpu/video.cpp
 +// The draw that is about to be flushed (diagnostics for draw-triggered resolve copies).
 +static struct { const char* kind; uint32_t primitiveType, count; const uint8_t* vertices; uint32_t stride; } g_iosCurrentDraw{ "?", 0, 0, nullptr, 0 };
 +
-+// Graphics → Reuse Render Targets (UNLEASHED_IOS_SWAP_RESOLVES=0/1): when a draw is about to overwrite a
++// Video → Reuse Render Targets (UNLEASHED_IOS_SWAP_RESOLVES=0/1): when a draw is about to overwrite a
 +// surface whose resolve into a texture is still pending, the port normally copies
 +// the surface into the texture first. If that draw provably rewrites every pixel of
 +// the surface without reading it (opaque full-viewport quad, no blending, depth
