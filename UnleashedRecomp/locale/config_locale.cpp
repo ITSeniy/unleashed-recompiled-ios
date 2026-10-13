@@ -302,7 +302,7 @@ CONFIG_DEFINE_LOCALE(VerticalCamera)
     { ELanguage::Italian,  { "Telecamera verticale", "Modifica come la telecamera si muove su e giù." } }
 };
 
-#if defined(UNLEASHED_RECOMP_IOS)
+#if defined(__ANDROID__) || defined(UNLEASHED_RECOMP_IOS)
 // Japanese Notes: This localization should include furigana.
 CONFIG_DEFINE_LOCALE(TouchCameraSensitivity)
 {

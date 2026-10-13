@@ -3309,7 +3309,7 @@ static void DrawImGui()
 #endif
     MessageWindow::Draw();
     ButtonGuide::Draw();
-#if defined(__ANDROID__)
+#if defined(__ANDROID__) || defined(UNLEASHED_RECOMP_IOS)
     TouchControls::Draw();
 #endif
     Fader::Draw();

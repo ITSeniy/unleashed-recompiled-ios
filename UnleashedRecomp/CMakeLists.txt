@@ -220,12 +220,9 @@ set(UNLEASHED_RECOMP_UI_CXX_SOURCES
     "ui/message_window.cpp"
     "ui/options_menu.cpp"
     "ui/options_menu_thumbnails.cpp"
+    "ui/touch_controls.cpp"
     "ui/tv_static.cpp"
 )
-
-if (NOT UNLEASHED_RECOMP_IOS)
-    list(APPEND UNLEASHED_RECOMP_UI_CXX_SOURCES "ui/touch_controls.cpp")
-endif()
 
 # The GUI installer wizard (native file picker + wizard UI) is not built for Android;
 # game files are pushed manually instead. See main.cpp / gpu/video.cpp __ANDROID__ guards.
@@ -235,9 +232,9 @@ endif()
 
 if (UNLEASHED_RECOMP_IOS)
     list(APPEND UNLEASHED_RECOMP_UI_CXX_SOURCES "ui/ios_file_picker.mm" "ui/ios_event_loop.mm" "ui/ios_launcher.mm"
-        "ui/ios_mod_manager.cpp" "ui/ios_mod_settings.mm" "ui/ios_touch_controls.mm")
-    set_source_files_properties(ui/ios_file_picker.mm ui/ios_event_loop.mm ui/ios_launcher.mm ui/ios_mod_settings.mm ui/ios_touch_controls.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
-    set_source_files_properties(ui/ios_event_loop.mm ui/ios_launcher.mm ui/ios_mod_settings.mm ui/ios_touch_controls.mm PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+        "ui/ios_mod_manager.cpp" "ui/ios_mod_settings.mm")
+    set_source_files_properties(ui/ios_file_picker.mm ui/ios_event_loop.mm ui/ios_launcher.mm ui/ios_mod_settings.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+    set_source_files_properties(ui/ios_event_loop.mm ui/ios_launcher.mm ui/ios_mod_settings.mm PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 endif()
 
 set(UNLEASHED_RECOMP_INSTALL_CXX_SOURCES

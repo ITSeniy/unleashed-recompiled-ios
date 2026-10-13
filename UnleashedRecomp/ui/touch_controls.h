@@ -11,23 +11,6 @@
 // input is received, and shown again on the next screen touch. The Android
 // Touch Controls setting can override that state with Always On or Off.
 
-#if defined(UNLEASHED_RECOMP_IOS)
-
-// iOS has native UIKit controls instead (ui/ios_touch_controls.mm).
-class TouchControls
-{
-public:
-    static bool IsVisible() { return false; }
-    static void SetVisible(bool) {}
-    static void NotifyMenuVisible() {}
-    static void NotifyCutsceneActive(bool) {}
-    static void NotifyMovieVisible() {}
-    static void Init() {}
-    static void Draw() {}
-};
-
-#else
-
 class TouchControls
 {
 public:
@@ -53,8 +36,9 @@ public:
     static void NotifyCutsceneActive(bool active);
     static void NotifyMovieVisible();
 
+    // Opens the drag-to-arrange layout editor once the overlay is drawn.
+    static void RequestLayoutEditor();
+
     static void Init();
     static void Draw();
 };
-
-#endif

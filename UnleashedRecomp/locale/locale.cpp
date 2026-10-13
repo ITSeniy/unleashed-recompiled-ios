@@ -1282,6 +1282,36 @@ std::unordered_map<std::string_view, std::unordered_map<ELanguage, std::string>>
         {
             { ELanguage::English, "This mod has no settings." }
         }
+    },
+    {
+        "IOSLauncher_Section_Controls",
+        {
+            { ELanguage::English, "Controls" }
+        }
+    },
+    {
+        "IOSLauncher_Group_Touch",
+        {
+            { ELanguage::English, "Touch controls" }
+        }
+    },
+    {
+        "IOSLauncher_ArrangeControls",
+        {
+            { ELanguage::English, "Arrange controls" }
+        }
+    },
+    {
+        "IOSLauncher_ArrangeControls_Footer",
+        {
+            { ELanguage::English, "Starts the game with the layout editor. Drag the controls into place and resize them; the layout is saved for the next launch." }
+        }
+    },
+    {
+        "IOSLauncher_ArrangeControls_NeedsGame",
+        {
+            { ELanguage::English, "Install the game first. The layout editor runs inside the game." }
+        }
     }
 };
 

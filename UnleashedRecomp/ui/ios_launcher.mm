@@ -2,6 +2,8 @@
 #include "ios_launcher.h"
 #include "ios_mod_manager.h"
 #include "ios_mod_settings.h"
+#include "touch_controls.h"
+#include <hid/touch_gamepad.h>
 #include <install/installer.h>
 #include <locale/locale.h>
 #include <os/logger.h>
@@ -247,8 +249,9 @@ static InstallStatus InspectInstallation()
 {
     [super viewDidLoad];
     self.view.backgroundColor = UIColor.systemGroupedBackgroundColor;
-    _sectionTitles = @[ L("IOSLauncher_Section_Game"), L("IOSLauncher_Section_Graphics"), L("IOSLauncher_Section_Mods"), L("IOSLauncher_Section_Advanced") ];
-    _sectionSymbols = @[ @"gamecontroller", @"display", @"puzzlepiece.extension", @"wrench.and.screwdriver" ];
+    _sectionTitles = @[ L("IOSLauncher_Section_Game"), L("IOSLauncher_Section_Graphics"), L("IOSLauncher_Section_Controls"),
+        L("IOSLauncher_Section_Mods"), L("IOSLauncher_Section_Advanced") ];
+    _sectionSymbols = @[ @"gamecontroller", @"display", @"hand.tap", @"puzzlepiece.extension", @"wrench.and.screwdriver" ];
     _section = [NSUserDefaults.standardUserDefaults integerForKey:@"launcher.section"];
     if (_section < 0 || _section >= (NSInteger)_sectionTitles.count)
         _section = 0;
@@ -345,10 +348,10 @@ static InstallStatus InspectInstallation()
     [_playButton addTarget:self action:@selector(play) forControlEvents:UIControlEventPrimaryActionTriggered];
     [_playButton.heightAnchor constraintEqualToConstant:52].active = YES;
 
+    UIButton* controls = [self quickButton:L("IOSLauncher_Section_Controls") symbol:@"hand.tap" action:@selector(showControls)];
     UIButton* mods = [self quickButton:L("IOSLauncher_Section_Mods") symbol:@"puzzlepiece.extension" action:@selector(showMods)];
     UIButton* files = [self quickButton:L("IOSLauncher_Files") symbol:@"folder" action:@selector(openFiles:)];
-    UIButton* log = [self quickButton:L("IOSLauncher_ShareLog") symbol:@"doc.text" action:@selector(shareLog:)];
-    UIStackView* quick = [[UIStackView alloc] initWithArrangedSubviews:@[ mods, files, log ]];
+    UIStackView* quick = [[UIStackView alloc] initWithArrangedSubviews:@[ controls, mods, files ]];
     quick.axis = UILayoutConstraintAxisHorizontal;
     quick.distribution = UIStackViewDistributionFillEqually;
     quick.spacing = 8;
@@ -425,9 +428,14 @@ static InstallStatus InspectInstallation()
     return rail;
 }
 
-- (void)showMods
+- (void)showControls
 {
     [self selectSection:2];
+}
+
+- (void)showMods
+{
+    [self selectSection:3];
 }
 
 - (void)selectSectionButton:(UIButton*)sender
@@ -528,8 +536,9 @@ static InstallStatus InspectInstallation()
     switch (_section)
     {
     case 1: _groups = [self graphicsGroups]; break;
-    case 2: _groups = [self modsGroups]; break;
-    case 3: _groups = [self advancedGroups]; break;
+    case 2: _groups = [self controlsGroups]; break;
+    case 3: _groups = [self modsGroups]; break;
+    case 4: _groups = [self advancedGroups]; break;
     default: _groups = [self gameGroups]; break;
     }
     [self updateRail];
@@ -650,6 +659,42 @@ static InstallStatus InspectInstallation()
     [overlays.rows addObject:ToggleRow(Config::MetalHUD, @"Metal HUD")];
 
     return @[ resolution, frameRate, quality, optimizations, overlays ];
+}
+
+- (NSArray<LauncherGroup*>*)controlsGroups
+{
+    __weak LauncherViewController* weakSelf = self;
+    LauncherGroup* touch = [LauncherGroup groupWithHeader:L("IOSLauncher_Group_Touch") footer:nil];
+    [touch.rows addObject:EnumRow(Config::TouchControls)];
+    [touch.rows addObject:EnumRow(Config::TouchCamera)];
+    [touch.rows addObject:EnumRow(Config::TouchStickMode)];
+
+    LauncherRow* sensitivity = [LauncherRow new];
+    sensitivity.kind = LauncherRowSlider;
+    sensitivity.title = NS(Config::TouchCameraSensitivity.GetNameLocalised(Config::Language));
+    sensitivity.minimum = hid::TouchGamepad::MinCameraSensitivity;
+    sensitivity.maximum = hid::TouchGamepad::MaxCameraSensitivity;
+    sensitivity.floatValue = ^float { return Config::TouchCameraSensitivity; };
+    sensitivity.setFloatValue = ^(float value) { Config::TouchCameraSensitivity = hid::TouchGamepad::ClampCameraSensitivity(value); };
+    sensitivity.formatFloat = ^NSString* (float value) { return [NSString stringWithFormat:@"%.2f×", value]; };
+    [touch.rows addObject:sensitivity];
+
+    LauncherGroup* layout = [LauncherGroup groupWithHeader:nil footer:L("IOSLauncher_ArrangeControls_Footer")];
+    [layout.rows addObject:[self actionRow:L("IOSLauncher_ArrangeControls") symbol:@"rectangle.and.hand.point.up.left" action:^(UIView*)
+    {
+        LauncherViewController* strongSelf = weakSelf;
+        if (strongSelf == nil)
+            return;
+        if (!strongSelf->_status.ready)
+        {
+            [strongSelf showMessage:L("IOSLauncher_ArrangeControls_NeedsGame")];
+            return;
+        }
+        TouchControls::RequestLayoutEditor();
+        [strongSelf finish:IOSLauncherAction::Play];
+    }]];
+
+    return @[ touch, layout ];
 }
 
 - (NSArray<LauncherGroup*>*)modsGroups

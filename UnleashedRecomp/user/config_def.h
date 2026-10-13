@@ -12,12 +12,12 @@ CONFIG_DEFINE("System", bool, ShowConsole, false);
 
 CONFIG_DEFINE_ENUM_LOCALISED("Input", ECameraRotationMode, HorizontalCamera, ECameraRotationMode::Normal);
 CONFIG_DEFINE_ENUM_LOCALISED("Input", ECameraRotationMode, VerticalCamera, ECameraRotationMode::Normal);
-#if defined(UNLEASHED_RECOMP_IOS)
+#if defined(__ANDROID__) || defined(UNLEASHED_RECOMP_IOS)
 CONFIG_DEFINE_LOCALISED("Input", float, TouchCameraSensitivity, 1.0f);
 #endif
 CONFIG_DEFINE_LOCALISED("Input", bool, Vibration, true);
 CONFIG_DEFINE_LOCALISED("Input", bool, AllowBackgroundInput, false);
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(UNLEASHED_RECOMP_IOS)
 CONFIG_DEFINE_ENUM_LOCALISED("Input", EAndroidTouchControlsPolicy, TouchControls, EAndroidTouchControlsPolicy::Auto);
 CONFIG_DEFINE_ENUM_LOCALISED("Input", EAndroidTouchCameraMode, TouchCamera, EAndroidTouchCameraMode::TouchArea);
 CONFIG_DEFINE_ENUM_LOCALISED("Input", EAndroidTouchStickMode, TouchStickMode, EAndroidTouchStickMode::Analog);

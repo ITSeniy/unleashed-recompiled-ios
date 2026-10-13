@@ -2,10 +2,9 @@
 #include <os/logger.h>
 #include <ui/game_window.h>
 #include <user/paths.h>
-#if defined(UNLEASHED_RECOMP_IOS)
 #include <hid/touch_gamepad.h>
+#if defined(UNLEASHED_RECOMP_IOS)
 #include <ui/ios_event_loop.h>
-#include <ui/ios_touch_controls.h>
 #endif
 
 std::vector<IConfigDef*> g_configDefinitions;
@@ -817,10 +816,11 @@ void Config::CreateCallbacks()
     {
         SetIOSFrameRateLimit(def->Value);
     };
+#endif
+#if defined(__ANDROID__) || defined(UNLEASHED_RECOMP_IOS)
     Config::TouchCameraSensitivity.Callback = [](ConfigDef<float>* def)
     {
         def->Value = hid::TouchGamepad::ClampCameraSensitivity(def->Value);
-        SetIOSTouchCameraSensitivity(def->Value);
     };
 #endif
 

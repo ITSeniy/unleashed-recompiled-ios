@@ -22,6 +22,7 @@
 #ifdef __ANDROID__
 #include "os/android/storage_android.h"
 #endif
+#include <user/paths.h>
 
 // ---------------------------------------------------------------------------
 // On-screen touch controls with a drag-to-arrange layout editor.
@@ -200,6 +201,8 @@ namespace
         const std::filesystem::path& root = os::android::GetDataRoot();
         if (!root.empty())
             return root / "touch_layout.ini";
+#elif defined(UNLEASHED_RECOMP_IOS)
+        return GetUserPath() / "touch_layout.ini";
 #endif
         return {};
     }
@@ -481,7 +484,7 @@ bool TouchControls::IsVisible()
     // user's normal touch-control policy is Off.
     if (g_edit)
         return true;
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(UNLEASHED_RECOMP_IOS)
     switch (Config::TouchControls.Value)
     {
         case EAndroidTouchControlsPolicy::AlwaysOn:
@@ -538,6 +541,13 @@ static void ConsumeEditMarker()
     }
 }
 #endif
+
+void TouchControls::RequestLayoutEditor()
+{
+    g_edit = true;
+    g_dragElem = -1;
+    g_selElem = -1;
+}
 
 void TouchControls::Init()
 {
@@ -859,7 +869,7 @@ void TouchControls::Draw()
                 const float dy = camPos->y - g_camLastPos.y;
                 g_camLastPos = *camPos;
 
-                const float full = vh * CAM_DRAG_SENS;
+                const float full = vh * CAM_DRAG_SENS / Config::TouchCameraSensitivity;
                 const float ax = std::clamp(dx / full, -1.0f, 1.0f);
                 const float ay = std::clamp(dy / full, -1.0f, 1.0f);
                 st.sThumbRX = int16_t(ax * 32767.0f);

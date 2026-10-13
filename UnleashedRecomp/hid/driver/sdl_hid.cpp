@@ -163,10 +163,6 @@ public:
 std::array<Controller, 4> g_controllers;
 Controller* g_activeController;
 static std::atomic<int> g_pendingControllerLED{ -1 };
-#if defined(UNLEASHED_RECOMP_IOS)
-static bool g_touchControllerEnabled;
-static XAMINPUT_GAMEPAD g_touchControllerState{};
-#endif
 
 inline Controller* EnsureController(uint32_t dwUserIndex)
 {
@@ -202,7 +198,7 @@ static void SetControllerInputDevice(Controller* controller)
 {
     g_activeController = controller;
 
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(UNLEASHED_RECOMP_IOS)
     // A physical controller reported input: hide the on-screen touch controls.
     TouchControls::SetVisible(false);
 #endif
@@ -263,10 +259,6 @@ int HID_OnSDLEvent(void*, SDL_Event* event)
                 auto& connectedController = g_controllers[freeIndex];
                 connectedController.Poll();
                 connectedController.PollAxis();
-#if defined(UNLEASHED_RECOMP_IOS)
-                g_touchControllerEnabled = false;
-                g_touchControllerState = {};
-#endif
                 if (!g_activeController)
                     SetControllerInputDevice(&connectedController);
 
@@ -433,26 +425,6 @@ bool hid::HasConnectedController()
     return false;
 }
 
-#if defined(UNLEASHED_RECOMP_IOS)
-void hid::SetTouchControllerState(bool enabled, const XAMINPUT_GAMEPAD& state)
-{
-    const JoystickLock lock;
-    const bool touchInput = state.wButtons || state.sThumbLX || state.sThumbLY || state.sThumbRX || state.sThumbRY;
-    if (enabled && (!g_touchControllerEnabled || touchInput) && !g_activeController)
-    {
-        g_inputDevice = g_inputDeviceController = EInputDevice::Xbox;
-        g_inputDeviceExplicit = EInputDeviceExplicit::Virtual;
-    }
-    g_touchControllerEnabled = enabled;
-    g_touchControllerState = enabled ? state : XAMINPUT_GAMEPAD{};
-}
-
-bool hid::IsTouchControllerActive()
-{
-    const JoystickLock lock;
-    return g_touchControllerEnabled && !g_activeController;
-}
-#endif
 
 uint32_t hid::GetState(uint32_t dwUserIndex, XAMINPUT_STATE* pState)
 {
@@ -466,7 +438,7 @@ uint32_t hid::GetState(uint32_t dwUserIndex, XAMINPUT_STATE* pState)
 
     pState->dwPacketNumber = packet++;
 
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(UNLEASHED_RECOMP_IOS)
     // While the on-screen touch controls are the active input source, feed their
     // synthesised state as player 1 (falls through to a physical pad when hidden).
     // Always On keeps the overlay present, so merge the physical pad instead of
@@ -501,13 +473,6 @@ uint32_t hid::GetState(uint32_t dwUserIndex, XAMINPUT_STATE* pState)
 
     if (!g_activeController)
     {
-#if defined(UNLEASHED_RECOMP_IOS)
-        if (g_touchControllerEnabled && dwUserIndex == 0)
-        {
-            pState->Gamepad = g_touchControllerState;
-            return ERROR_SUCCESS;
-        }
-#endif
         return ERROR_DEVICE_NOT_CONNECTED;
     }
 
@@ -524,10 +489,6 @@ uint32_t hid::SetState(uint32_t dwUserIndex, XAMINPUT_VIBRATION* pVibration)
 
     if (!g_activeController)
     {
-#if defined(UNLEASHED_RECOMP_IOS)
-        if (g_touchControllerEnabled && dwUserIndex == 0)
-            return ERROR_SUCCESS;
-#endif
         return ERROR_DEVICE_NOT_CONNECTED;
     }
 
@@ -544,19 +505,6 @@ uint32_t hid::GetCapabilities(uint32_t dwUserIndex, XAMINPUT_CAPABILITIES* pCaps
 
     if (!g_activeController)
     {
-#if defined(UNLEASHED_RECOMP_IOS)
-        if (g_touchControllerEnabled && dwUserIndex == 0)
-        {
-            memset(pCaps, 0, sizeof(*pCaps));
-            pCaps->Type = XAMINPUT_DEVTYPE_GAMEPAD;
-            pCaps->SubType = XAMINPUT_DEVSUBTYPE_GAMEPAD;
-            pCaps->Gamepad.wButtons = XAMINPUT_GAMEPAD_START | XAMINPUT_GAMEPAD_BACK
-                | XAMINPUT_GAMEPAD_X | XAMINPUT_GAMEPAD_A | XAMINPUT_GAMEPAD_B;
-            pCaps->Gamepad.sThumbLX = pCaps->Gamepad.sThumbLY = 32767;
-            pCaps->Gamepad.sThumbRX = pCaps->Gamepad.sThumbRY = 32767;
-            return ERROR_SUCCESS;
-        }
-#endif
         return ERROR_DEVICE_NOT_CONNECTED;
     }
 

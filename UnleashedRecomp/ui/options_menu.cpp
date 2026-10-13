@@ -8,9 +8,7 @@
 #include <gpu/video.h>
 #include <gpu/imgui/imgui_snapshot.h>
 #include <hid/hid.h>
-#if defined(UNLEASHED_RECOMP_IOS)
 #include <hid/touch_gamepad.h>
-#endif
 #include <kernel/heap.h>
 #include <kernel/memory.h>
 #include <locale/locale.h>
@@ -18,6 +16,7 @@
 #include <patches/audio_patches.h>
 #include <ui/button_guide.h>
 #include <ui/game_window.h>
+#include <ui/touch_controls.h>
 #include <ui/imgui_utils.h>
 #include <app.h>
 #include <decompressor.h>
@@ -467,7 +466,7 @@ static bool DrawCategories()
     bool moveLeft = !g_lockedOnOption && inputState->GetPadState().IsTapped(SWA::eKeyState_LeftBumper);
     bool moveRight = !g_lockedOnOption && inputState->GetPadState().IsTapped(SWA::eKeyState_RightBumper);
 #if defined(UNLEASHED_RECOMP_IOS)
-    const float touchAxis = hid::IsTouchControllerActive() ? float(inputState->GetPadState().LeftStickHorizontal) : 0;
+    const float touchAxis = TouchControls::IsVisible() ? float(inputState->GetPadState().LeftStickHorizontal) : 0;
     const int direction = touchAxis < -0.5f ? -1 : touchAxis > 0.5f ? 1 : 0;
     if (!g_lockedOnOption && direction != g_touchCategoryAxis)
     {
@@ -1264,7 +1263,7 @@ static void DrawConfigOptions()
         case 1: // INPUT
             DrawConfigOption(rowCount++, yOffset, &Config::HorizontalCamera, true);
             DrawConfigOption(rowCount++, yOffset, &Config::VerticalCamera, true);
-#if defined(UNLEASHED_RECOMP_IOS)
+#if defined(__ANDROID__) || defined(UNLEASHED_RECOMP_IOS)
             DrawConfigOption(rowCount++, yOffset, &Config::TouchCameraSensitivity, true, nullptr,
                 hid::TouchGamepad::MinCameraSensitivity, hid::TouchGamepad::DefaultCameraSensitivity, hid::TouchGamepad::MaxCameraSensitivity);
 #endif
@@ -1273,7 +1272,7 @@ static void DrawConfigOptions()
             // Window focus is a desktop concept; Android apps pause in background.
             DrawConfigOption(rowCount++, yOffset, &Config::AllowBackgroundInput, true);
 #endif
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(UNLEASHED_RECOMP_IOS)
             DrawConfigOption(rowCount++, yOffset, &Config::TouchControls, true);
             DrawConfigOption(rowCount++, yOffset, &Config::TouchCamera, true);
             DrawConfigOption(rowCount++, yOffset, &Config::TouchStickMode, true);

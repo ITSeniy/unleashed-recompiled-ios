@@ -1,6 +1,5 @@
 #include <stdafx.h>
 #include "ios_event_loop.h"
-#include "ios_touch_controls.h"
 #include <ui/game_window.h>
 #include <hid/hid.h>
 #include <apu/audio.h>
@@ -138,7 +137,6 @@ static void PumpEvents(void*)
     UpdateDisplayLinkFrameRate();
     PumpEvents(nullptr);
     const double frameInterval = displayLink.targetTimestamp - displayLink.timestamp;
-    UpdateIOSTouchControls(frameInterval);
     // The link interval is a whole number of real refreshes; keep one refresh,
     // smoothed because timestamps carry a little scheduling jitter.
     UIWindow* window = (__bridge UIWindow*)GameWindow::s_renderWindow.window;
@@ -160,10 +158,6 @@ static void SetExecutionActive(bool active)
     if (active)
         UpdateDisplayLinkFrameRate();
     g_displayLink.paused = !active;
-    if (active)
-        UpdateIOSTouchControls(0);
-    else
-        ResetIOSTouchControls();
     auto& gate = app_lifecycle::GetExecutionGate();
     if (gate.IsActive() == active)
         return;
@@ -220,13 +214,6 @@ bool StartIOSEventLoop()
         return false;
     }
     SetIOSFrameRateLimit(Config::FPS);
-    if (!StartIOSTouchControls())
-    {
-        [g_displayLink invalidate];
-        g_displayLink = nil;
-        SDL_SetError("Could not create the iOS touch controls");
-        return false;
-    }
     UpdateDisplayLinkFrameRate();
     [g_displayLink addToRunLoop:NSRunLoop.mainRunLoop forMode:NSRunLoopCommonModes];
 
