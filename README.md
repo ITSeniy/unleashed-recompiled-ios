@@ -12,7 +12,8 @@ An experimental iPhone/iPad port of [Unleashed Recompiled](https://github.com/he
 
 - Boots and plays: hub worlds, day and night stages, cutscenes, saves.
 - Native Metal renderer with Xbox 360 BC textures transcoded to ETC2 on devices without BC support.
-- Touch controls on top of the game; host menus and controls stay at native resolution.
+- A native launcher before the game: install state, graphics settings, touch controls, mods and codes, update checks and diagnostics (see [Launcher](#launcher)).
+- The same touch controls as the Android port, with a layout editor; host menus and controls stay at native resolution.
 - **MetalFX Spatial** upscaling: the game renders at a lower internal resolution and Apple's upscaler brings it to the screen's native resolution.
 - Frame-pacing fixes for 30 and 60 FPS caps, including the iPhone panel's real 60.09 Hz refresh.
 - Two render-target optimizations that cut GPU work by about 17% (see [Settings](#settings)).
@@ -76,15 +77,30 @@ After the first install:
 ## Add your game files
 
 1. Install the game with the official Unleashed Recompiled installer on PC (or with the Android port). This produces the `game`, `update` and `patched` folders, plus optional DLC folders.
-2. Launch the iOS app once so it creates its data folder, then close it.
-3. Copy those folders into **On My iPhone → Unleashed Recompiled → UnleashedRecomp**, using the Files app or Finder (select the device, then **Files**).
-4. Start the app.
+2. Launch the iOS app once so it creates its data folder.
+3. Copy those folders into **On My iPhone → Unleashed Recompiled → UnleashedRecomp**, using the Files app or Finder (select the device, then **Files**). The launcher's **Files** button opens that folder.
+4. Return to the app, which rechecks the files, and tap **Play**.
+
+Alternatively, tap **Install game** in the launcher to install from your own disc image, title update and DLC packages.
 
 Saves, settings and the log (`unleashedrecomp.log`) live in the same folder. You can back them up or move them between devices.
 
+## Launcher
+
+The launcher opens before the game and saves every change right away. Sections:
+
+- **Game:** which files and DLC packs are installed, the data folder in Files, and the installer for the game or DLC.
+- **Graphics:** the settings below plus quality options; Metal HUD applies without a restart here.
+- **Controls:** when touch controls are shown (automatic, always, off), camera by swipe or a right stick, analog or D-pad stick, camera sensitivity, and **Arrange controls**, which starts the game in the layout editor.
+- **Mods:** HMM/UMM mods from the `mods` folder, with on/off switches, load order, settings for mods that ship a configuration schema, and installing a mod from a folder or ZIP. **Codes** are the built-in game patches.
+- **Updates:** compares the app with the latest [release](https://github.com/ITSeniy/unleashed-recompiled-ios/releases) of this fork.
+- **Advanced:** skip intro logos, force ETC2 textures for testing, diagnostic logs, and sharing the log.
+
+Mods use the same `cpkredir.ini` format as desktop mod managers, with paths relative to the app folder.
+
 ## Settings
 
-The iOS-specific options are under **Options → Video**:
+The iOS-specific options are in the launcher's **Graphics** section and in-game under **Options → Video**:
 
 | Setting | Default | What it does |
 | --- | --- | --- |
@@ -95,7 +111,7 @@ The iOS-specific options are under **Options → Video**:
 | FPS | 30 | 60 FPS needs a fast device; 30 FPS saves battery and heat. |
 | Metal HUD | Off | Apple's frame-time overlay. Takes effect after a restart. |
 
-These apply immediately, except Metal HUD. Guidance for iPhone 15–class devices:
+In-game, these apply immediately except Metal HUD, which needs a restart. Guidance for iPhone 15–class devices:
 
 - **60 FPS:** 66% with MetalFX (default).
 - **Sharper at 60 FPS:** up to 75%, but it sits at the edge of the GPU budget once the phone warms up.

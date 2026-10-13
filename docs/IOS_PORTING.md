@@ -1464,3 +1464,31 @@ before, and the Android build (NDK r29, arm64-v8a, debug, installed beside the
 Android 16 does not let an app read files that `adb push` (the `shell` user)
 writes into its `Android/data` directory. For a debuggable test build, copy the
 game files into internal storage with `run-as` instead.
+
+## Launcher and feature parity with Android (2026-10-13)
+
+`ui/ios_launcher.mm` shows a UIKit launcher from `main()` after `Config::Load()`
+and before the game creates its window, in a nested run loop on the scene SDL
+connects (the same pattern as the installer's document picker). It follows the
+Android launcher's layout: status and Play on the left, sections on the right.
+Settings rows are built from the `ConfigDef`s, so names, descriptions and enum
+values use the game's localisation. Hidden values (codes, Skip intro logos) are
+marked as loaded when toggled; otherwise `Config::Save` skips them.
+
+- Mods: `ui/ios_mod_manager.cpp` writes `cpkredir.ini` and `ios_mods_db.ini`
+  for the shared `ModLoader` with paths relative to the ini files, because the
+  app container path can change on reinstall. ZIPs are extracted with miniz.
+  HMM `ConfigSchemaFile` settings are parsed with `NSJSONReadingJSON5Allowed`,
+  which accepts the comments and trailing commas JSON.NET allows.
+- Touch controls: iOS now uses Android's ImGui overlay instead of its own UIKit
+  layer. Touch Camera Sensitivity scales the overlay's swipe camera on both
+  platforms. The launcher opens the layout editor through
+  `TouchControls::RequestLayoutEditor()`.
+- Updates: the app is versioned separately (0.1.0); the launcher checks the
+  fork's `ios-v*` releases. The game's hedge-dev update check is off on iOS.
+- Testing: `UNLEASHED_IOS_FORCE_NO_BC=1` (the launcher's Force ETC2 textures)
+  exercises the ETC2 transcode on GPUs that support BC.
+
+Pitfalls found on the device: the overlay's `Draw()` call in `video.cpp` was
+Android-only, and `UITableView` ignores row taps in edit mode unless
+`allowsSelectionDuringEditing` is set.
