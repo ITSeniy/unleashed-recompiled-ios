@@ -1,5 +1,6 @@
 #include <stdafx.h>
 #include "ios_launcher.h"
+#include "ios_data_folder.h"
 #include "ios_mod_manager.h"
 #include "ios_mod_settings.h"
 #include "touch_controls.h"
@@ -88,6 +89,8 @@ static NSString* OneLine(const std::string& text)
 {
     return [NS(text) stringByReplacingOccurrencesOfString:@"\n" withString:@" "];
 }
+
+extern NSString* const IOSDataFolderBookmarkKey;
 
 // The port's releases are tagged ios-vX.Y.Z on the fork.
 static NSString* const ReleasesAPI = @"https://api.github.com/repos/ITSeniy/unleashed-recompiled-ios/releases/latest";
@@ -276,6 +279,7 @@ static InstallStatus InspectInstallation()
     std::vector<IOSMod> _mods;
     BOOL _reordering;
     BOOL _checkingUpdates;
+    BOOL _pickingDataFolder;
     NSString* _updateError;
     NSInteger _section;
     NSArray<NSString*>* _sectionTitles;
@@ -671,7 +675,206 @@ static InstallStatus InspectInstallation()
         [actions.rows addObject:[self actionRow:L("IOSLauncher_InstallDLC") symbol:@"plus.circle" action:^(UIView*) { [weakSelf finish:IOSLauncherAction::InstallDLC]; }]];
     [actions.rows addObject:[self actionRow:L("IOSLauncher_Recheck") symbol:@"arrow.clockwise" action:^(UIView*) { [weakSelf refresh]; }]];
 
-    return _status.ready ? @[ files, dlc, actions ] : @[ files, actions ];
+    LauncherGroup* data = [self dataFolderGroup];
+    return _status.ready ? @[ files, dlc, actions, data ] : @[ files, actions, data ];
+}
+
+- (LauncherGroup*)dataFolderGroup
+{
+    __weak LauncherViewController* weakSelf = self;
+    const BOOL custom = [NSUserDefaults.standardUserDefaults dataForKey:IOSDataFolderBookmarkKey] != nil;
+    LauncherGroup* group = [LauncherGroup groupWithHeader:L("IOSLauncher_Group_DataFolder") footer:L("IOSLauncher_DataFolder_Footer")];
+    if (ios_data_folder::IsUnavailable())
+        [group.rows addObject:[self infoRow:L("IOSLauncher_DataFolder_Unavailable") value:@"" symbol:@"exclamationmark.triangle" color:UIColor.systemOrangeColor]];
+
+    NSString* location = custom && !ios_data_folder::IsUnavailable() ? PathString(GetUserPath()).lastPathComponent : L("IOSLauncher_DataFolder_InApp");
+    [group.rows addObject:[self infoRow:L("IOSLauncher_DataFolder_Location") value:location symbol:@"externaldrive" color:UIColor.systemBlueColor]];
+    [group.rows addObject:[self actionRow:L("IOSLauncher_DataFolder_Choose") symbol:@"folder.badge.gearshape" action:^(UIView*) { [weakSelf pickDataFolder]; }]];
+    if (custom)
+        [group.rows addObject:[self actionRow:L("IOSLauncher_DataFolder_UseApp") symbol:@"arrow.uturn.backward" action:^(UIView*) { [weakSelf resetDataFolder]; }]];
+    return group;
+}
+
+- (void)pickDataFolder
+{
+    UIDocumentPickerViewController* picker = [[UIDocumentPickerViewController alloc]
+        initWithDocumentTypes:@[ @"public.folder" ] inMode:UIDocumentPickerModeOpen];
+    picker.delegate = self;
+    _pickingDataFolder = YES;
+    [self presentViewController:picker animated:YES completion:nil];
+}
+
+- (void)documentPickerWasCancelled:(UIDocumentPickerViewController*)controller
+{
+    _pickingDataFolder = NO;
+}
+
+static NSArray<NSString*>* FolderEntries(NSString* path)
+{
+    NSMutableArray<NSString*>* entries = [NSMutableArray array];
+    for (NSString* name in [NSFileManager.defaultManager contentsOfDirectoryAtPath:path error:nil] ?: @[])
+    {
+        if (![name isEqualToString:@".DS_Store"] && ![name hasPrefix:@".Trash"])
+            [entries addObject:name];
+    }
+    return entries;
+}
+
+- (void)handleDataFolder:(NSURL*)url
+{
+    if (![url startAccessingSecurityScopedResource])
+    {
+        [self showMessage:L("IOSLauncher_DataFolder_NotWritable")];
+        return;
+    }
+
+    // The folder must outlive the app, so it cannot be inside the app's container.
+    NSString* path = url.URLByResolvingSymlinksInPath.path;
+    NSString* home = NSHomeDirectory().stringByResolvingSymlinksInPath;
+    NSNumber* ubiquitous = nil;
+    [url getResourceValue:&ubiquitous forKey:NSURLIsUbiquitousItemKey error:nil];
+    NSString* probe = [path stringByAppendingPathComponent:@".unleashed_write_probe"];
+    NSString* problem = nil;
+    if ([path isEqualToString:home] || [path hasPrefix:[home stringByAppendingString:@"/"]])
+        problem = L("IOSLauncher_DataFolder_InsideApp");
+    else if (ubiquitous.boolValue)
+        problem = L("IOSLauncher_DataFolder_iCloud");
+    else if (![NSFileManager.defaultManager createFileAtPath:probe contents:[NSData data] attributes:nil])
+        problem = L("IOSLauncher_DataFolder_NotWritable");
+    [NSFileManager.defaultManager removeItemAtPath:probe error:nil];
+    NSData* bookmark = problem ? nil : [url bookmarkDataWithOptions:0 includingResourceValuesForKeys:nil relativeToURL:nil error:nil];
+    if (problem == nil && bookmark == nil)
+        problem = L("IOSLauncher_DataFolder_NotWritable");
+    if (problem)
+    {
+        [url stopAccessingSecurityScopedResource];
+        [self showMessage:problem];
+        return;
+    }
+
+    NSString* current = PathString(GetUserPath()).stringByResolvingSymlinksInPath;
+    if ([current isEqualToString:path])
+    {
+        [url stopAccessingSecurityScopedResource];
+        return;
+    }
+
+    NSArray<NSString*>* destination = FolderEntries(path);
+    NSMutableArray<NSString*>* source = [FolderEntries(current) mutableCopy];
+    [source removeObject:@"unleashedrecomp.log"];
+    const BOOL destinationHasData = [destination containsObject:@"game"] || [destination containsObject:@"config.toml"];
+
+    __weak LauncherViewController* weakSelf = self;
+    UIAlertController* alert;
+    if (destinationHasData)
+    {
+        // A folder used before, e.g. after reinstalling the app.
+        alert = [UIAlertController alertControllerWithTitle:L("IOSLauncher_DataFolder_UseExisting_Title")
+            message:L("IOSLauncher_DataFolder_UseExisting") preferredStyle:UIAlertControllerStyleAlert];
+        [alert addAction:[UIAlertAction actionWithTitle:L("IOSLauncher_DataFolder_Use") style:UIAlertActionStyleDefault handler:^(UIAlertAction*)
+        {
+            [weakSelf saveDataFolderBookmark:bookmark];
+        }]];
+    }
+    else if (source.count > 0)
+    {
+        if (destination.count > 0)
+        {
+            [url stopAccessingSecurityScopedResource];
+            [self showMessage:L("IOSLauncher_DataFolder_NotEmpty")];
+            return;
+        }
+        alert = [UIAlertController alertControllerWithTitle:L("IOSLauncher_DataFolder_Move_Title")
+            message:L("IOSLauncher_DataFolder_Move") preferredStyle:UIAlertControllerStyleAlert];
+        [alert addAction:[UIAlertAction actionWithTitle:L("IOSLauncher_DataFolder_MoveButton") style:UIAlertActionStyleDefault handler:^(UIAlertAction*)
+        {
+            [weakSelf moveData:source from:current to:path bookmark:bookmark];
+        }]];
+    }
+    else
+    {
+        alert = [UIAlertController alertControllerWithTitle:L("IOSLauncher_DataFolder_UseEmpty_Title")
+            message:L("IOSLauncher_DataFolder_UseEmpty") preferredStyle:UIAlertControllerStyleAlert];
+        [alert addAction:[UIAlertAction actionWithTitle:L("IOSLauncher_DataFolder_Use") style:UIAlertActionStyleDefault handler:^(UIAlertAction*)
+        {
+            [weakSelf saveDataFolderBookmark:bookmark];
+        }]];
+    }
+    [alert addAction:[UIAlertAction actionWithTitle:L("IOSLauncher_Cancel") style:UIAlertActionStyleCancel handler:^(UIAlertAction*)
+    {
+        [url stopAccessingSecurityScopedResource];
+    }]];
+    [self presentViewController:alert animated:YES completion:nil];
+}
+
+- (void)moveData:(NSArray<NSString*>*)names from:(NSString*)source to:(NSString*)destination bookmark:(NSData*)bookmark
+{
+    UIAlertController* progress = [UIAlertController alertControllerWithTitle:L("IOSLauncher_DataFolder_Moving") message:nil preferredStyle:UIAlertControllerStyleAlert];
+    [self presentViewController:progress animated:YES completion:nil];
+
+    __weak LauncherViewController* weakSelf = self;
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^
+    {
+        // Same volume, so each move is a rename; undo the finished ones on failure.
+        NSFileManager* files = NSFileManager.defaultManager;
+        NSMutableArray<NSString*>* moved = [NSMutableArray array];
+        NSError* error = nil;
+        for (NSString* name in names)
+        {
+            if (![files moveItemAtPath:[source stringByAppendingPathComponent:name] toPath:[destination stringByAppendingPathComponent:name] error:&error])
+                break;
+            [moved addObject:name];
+        }
+        if (error != nil)
+        {
+            for (NSString* name in moved)
+                [files moveItemAtPath:[destination stringByAppendingPathComponent:name] toPath:[source stringByAppendingPathComponent:name] error:nil];
+        }
+        LOGFN("Moved {} of {} data items to the chosen folder.", moved.count, names.count);
+        dispatch_async(dispatch_get_main_queue(), ^
+        {
+            [progress dismissViewControllerAnimated:YES completion:^
+            {
+                if (error != nil)
+                    [weakSelf showMessage:[L("IOSLauncher_DataFolder_MoveFailed") stringByReplacingOccurrencesOfString:@"{}" withString:error.localizedDescription]];
+                else
+                    [weakSelf saveDataFolderBookmark:bookmark];
+            }];
+        });
+    });
+}
+
+- (void)saveDataFolderBookmark:(NSData*)bookmark
+{
+    NSUserDefaults* defaults = NSUserDefaults.standardUserDefaults;
+    if (bookmark)
+        [defaults setObject:bookmark forKey:IOSDataFolderBookmarkKey];
+    else
+        [defaults removeObjectForKey:IOSDataFolderBookmarkKey];
+    [defaults synchronize];
+    LOGN(bookmark ? "Data folder changed; restarting." : "Data folder reset to the app folder; restarting.");
+
+    // The data path is fixed at startup, before the config and log are opened.
+    UIAlertController* alert = [UIAlertController alertControllerWithTitle:L("IOSLauncher_DataFolder_Restart_Title")
+        message:L("IOSLauncher_DataFolder_Restart") preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:L("IOSLauncher_OK") style:UIAlertActionStyleDefault handler:^(UIAlertAction*)
+    {
+        std::_Exit(0);
+    }]];
+    [self presentViewController:alert animated:YES completion:nil];
+}
+
+- (void)resetDataFolder
+{
+    __weak LauncherViewController* weakSelf = self;
+    UIAlertController* alert = [UIAlertController alertControllerWithTitle:L("IOSLauncher_DataFolder_UseApp")
+        message:L("IOSLauncher_DataFolder_UseApp_Message") preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:L("IOSLauncher_DataFolder_UseApp") style:UIAlertActionStyleDestructive handler:^(UIAlertAction*)
+    {
+        [weakSelf saveDataFolderBookmark:nil];
+    }]];
+    [alert addAction:[UIAlertAction actionWithTitle:L("IOSLauncher_Cancel") style:UIAlertActionStyleCancel handler:nil]];
+    [self presentViewController:alert animated:YES completion:nil];
 }
 
 - (NSArray<LauncherGroup*>*)graphicsGroups
@@ -908,6 +1111,12 @@ static InstallStatus InspectInstallation()
     NSURL* url = urls.firstObject;
     if (url == nil)
         return;
+    if (_pickingDataFolder)
+    {
+        _pickingDataFolder = NO;
+        [self handleDataFolder:url];
+        return;
+    }
 
     const BOOL scoped = [url startAccessingSecurityScopedResource];
     UIAlertController* progress = [UIAlertController alertControllerWithTitle:L("IOSLauncher_Mods_Installing") message:nil preferredStyle:UIAlertControllerStyleAlert];

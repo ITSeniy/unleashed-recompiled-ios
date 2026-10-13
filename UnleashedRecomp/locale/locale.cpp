@@ -1390,6 +1390,156 @@ std::unordered_map<std::string_view, std::unordered_map<ELanguage, std::string>>
         {
             { ELanguage::English, "What's new" }
         }
+    },
+    {
+        "IOSLauncher_Cancel",
+        {
+            { ELanguage::English, "Cancel" }
+        }
+    },
+    {
+        "IOSLauncher_Group_DataFolder",
+        {
+            { ELanguage::English, "Data folder" }
+        }
+    },
+    {
+        "IOSLauncher_DataFolder_Footer",
+        {
+            { ELanguage::English, "Game files, saves, mods and settings live here. The app's own folder is deleted when the app is removed, for example when a build signed with another Apple ID replaces it. Choose a folder elsewhere in Files, such as On My iPhone, to keep your data; after reinstalling, choose it again." }
+        }
+    },
+    {
+        "IOSLauncher_DataFolder_Location",
+        {
+            { ELanguage::English, "Location" }
+        }
+    },
+    {
+        "IOSLauncher_DataFolder_InApp",
+        {
+            { ELanguage::English, "In the app" }
+        }
+    },
+    {
+        "IOSLauncher_DataFolder_Choose",
+        {
+            { ELanguage::English, "Choose folder" }
+        }
+    },
+    {
+        "IOSLauncher_DataFolder_UseApp",
+        {
+            { ELanguage::English, "Use the app's folder" }
+        }
+    },
+    {
+        "IOSLauncher_DataFolder_UseApp_Message",
+        {
+            { ELanguage::English, "The app goes back to its own folder. Your data stays in the chosen folder; move it with Files if you need it in the app." }
+        }
+    },
+    {
+        "IOSLauncher_DataFolder_Unavailable",
+        {
+            { ELanguage::English, "The chosen data folder can't be opened. Choose it again." }
+        }
+    },
+    {
+        "IOSLauncher_DataFolder_InsideApp",
+        {
+            { ELanguage::English, "Choose a folder outside Unleashed Recompiled, for example a new folder in On My iPhone. Folders inside the app are deleted with it." }
+        }
+    },
+    {
+        "IOSLauncher_DataFolder_iCloud",
+        {
+            { ELanguage::English, "iCloud Drive can remove files from the device, and the game can't read them then. Choose a folder in On My iPhone." }
+        }
+    },
+    {
+        "IOSLauncher_DataFolder_NotWritable",
+        {
+            { ELanguage::English, "The app can't write to this folder. Choose another one." }
+        }
+    },
+    {
+        "IOSLauncher_DataFolder_NotEmpty",
+        {
+            { ELanguage::English, "This folder already has other files. Choose an empty folder to move your data into." }
+        }
+    },
+    {
+        "IOSLauncher_DataFolder_UseExisting_Title",
+        {
+            { ELanguage::English, "Use this folder?" }
+        }
+    },
+    {
+        "IOSLauncher_DataFolder_UseExisting",
+        {
+            { ELanguage::English, "It already has game data, for example from before reinstalling. The app will use it; data in the app's folder stays where it is." }
+        }
+    },
+    {
+        "IOSLauncher_DataFolder_Move_Title",
+        {
+            { ELanguage::English, "Move your data?" }
+        }
+    },
+    {
+        "IOSLauncher_DataFolder_Move",
+        {
+            { ELanguage::English, "Game files, saves, mods and settings will be moved to this folder." }
+        }
+    },
+    {
+        "IOSLauncher_DataFolder_MoveButton",
+        {
+            { ELanguage::English, "Move" }
+        }
+    },
+    {
+        "IOSLauncher_DataFolder_UseEmpty_Title",
+        {
+            { ELanguage::English, "Use this folder?" }
+        }
+    },
+    {
+        "IOSLauncher_DataFolder_UseEmpty",
+        {
+            { ELanguage::English, "Put your game files into this folder after the app restarts." }
+        }
+    },
+    {
+        "IOSLauncher_DataFolder_Use",
+        {
+            { ELanguage::English, "Use folder" }
+        }
+    },
+    {
+        "IOSLauncher_DataFolder_Moving",
+        {
+            { ELanguage::English, "Moving data…" }
+        }
+    },
+    {
+        "IOSLauncher_DataFolder_MoveFailed",
+        {
+            { ELanguage::English, "Couldn't move the data, so nothing was changed: {}" }
+        }
+    },
+    {
+        "IOSLauncher_DataFolder_Restart_Title",
+        {
+            { ELanguage::English, "Restart required" }
+        }
+    },
+    {
+        "IOSLauncher_DataFolder_Restart",
+        {
+            { ELanguage::English, "The app will close. Open it again to use the new data folder." }
+        }
     }
 };
 

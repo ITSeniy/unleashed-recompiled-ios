@@ -4,6 +4,9 @@
 #include <TargetConditionals.h>
 #include <SDL.h>
 #endif
+#if defined(UNLEASHED_RECOMP_IOS)
+#include <ui/ios_data_folder.h>
+#endif
 #if defined(__linux__) || defined(__APPLE__)
 #include <pwd.h>
 #include <unistd.h>
@@ -42,6 +45,11 @@ std::filesystem::path BuildUserPath()
     userPath = os::android::GetDataRoot() / ".config" / USER_DIRECTORY;
 #elif defined(__linux__) || defined(__APPLE__)
 #if defined(__APPLE__) && TARGET_OS_IPHONE
+#if defined(UNLEASHED_RECOMP_IOS)
+    // A folder in Files chosen in the launcher, which survives reinstalling the app.
+    if (auto dataFolder = ios_data_folder::Resolve(); !dataFolder.empty())
+        return dataFolder;
+#endif
     const char* homeDir = getenv("HOME");
     if (homeDir != nullptr && *homeDir != '\0')
     {

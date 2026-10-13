@@ -232,9 +232,9 @@ endif()
 
 if (UNLEASHED_RECOMP_IOS)
     list(APPEND UNLEASHED_RECOMP_UI_CXX_SOURCES "ui/ios_file_picker.mm" "ui/ios_event_loop.mm" "ui/ios_launcher.mm"
-        "ui/ios_mod_manager.cpp" "ui/ios_mod_settings.mm")
-    set_source_files_properties(ui/ios_file_picker.mm ui/ios_event_loop.mm ui/ios_launcher.mm ui/ios_mod_settings.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
-    set_source_files_properties(ui/ios_event_loop.mm ui/ios_launcher.mm ui/ios_mod_settings.mm PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+        "ui/ios_mod_manager.cpp" "ui/ios_mod_settings.mm" "ui/ios_data_folder.mm")
+    set_source_files_properties(ui/ios_file_picker.mm ui/ios_event_loop.mm ui/ios_launcher.mm ui/ios_mod_settings.mm ui/ios_data_folder.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+    set_source_files_properties(ui/ios_event_loop.mm ui/ios_launcher.mm ui/ios_mod_settings.mm ui/ios_data_folder.mm PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 endif()
 
 set(UNLEASHED_RECOMP_INSTALL_CXX_SOURCES
