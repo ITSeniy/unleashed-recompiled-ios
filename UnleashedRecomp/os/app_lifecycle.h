@@ -48,15 +48,16 @@ namespace app_lifecycle
         return gate;
     }
 
-    inline void WaitForFrame(double& deltaTime)
+    inline void WaitForFrame(double& deltaTime, double resumeDeltaTime)
     {
         const auto resumeGeneration = GetExecutionGate().WaitUntilActive();
         static thread_local uint64_t previousResumeGeneration = 0;
         if (resumeGeneration != previousResumeGeneration)
         {
-            // Guest clocks keep advancing while suspended. Discard the gap
-            // on each frame-producing thread, including the loading thread.
-            deltaTime = 0.0;
+            // Guest clocks keep advancing while suspended. Replace the gap with
+            // one ordinary frame: a zero delta reaches guest code that divides by
+            // it, and the NaNs hid objects or blacked out the HDR exposure.
+            deltaTime = resumeDeltaTime;
             previousResumeGeneration = resumeGeneration;
         }
     }

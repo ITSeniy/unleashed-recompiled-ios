@@ -111,7 +111,8 @@ PPC_FUNC(sub_822C1130)
 #endif
 
 #if defined(UNLEASHED_RECOMP_IOS)
-    app_lifecycle::WaitForFrame(ctx.f1.f64);
+    app_lifecycle::WaitForFrame(ctx.f1.f64,
+        Config::FPS >= FPS_MIN && Config::FPS < FPS_MAX ? 1.0 / Config::FPS : 1.0 / 60.0);
 #endif
     Video::WaitOnSwapChain();
 
