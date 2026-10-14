@@ -14,7 +14,7 @@ An experimental iPhone/iPad port of [Unleashed Recompiled](https://github.com/he
 - Native Metal renderer with Xbox 360 BC textures transcoded to ETC2 on devices without BC support.
 - A native launcher before the game: install state, graphics settings, touch controls, mods and codes, update checks and diagnostics (see [Launcher](#launcher)).
 - The same touch controls as the Android port, with a layout editor; host menus and controls stay at native resolution.
-- **MetalFX Spatial** upscaling: the game renders at a lower internal resolution and Apple's upscaler brings it to the screen's native resolution.
+- **MetalFX Spatial** upscaling with DLSS-style presets: the game renders at a lower internal resolution and Apple's upscaler brings it to the screen's native resolution.
 - Frame-pacing fixes for 30 and 60 FPS caps, including the iPhone panel's real 60.09 Hz refresh.
 - Two render-target optimizations that cut GPU work by about 17% (see [Settings](#settings)).
 
@@ -85,18 +85,22 @@ Alternatively, tap **Install game** in the launcher to install from your own dis
 
 Saves, settings and the log (`unleashedrecomp.log`) live in the same folder. You can back them up or move them between devices.
 
+### Keep your data when reinstalling
+
+iOS deletes an app's folder when the app is removed. That happens when you install a build signed with a different Apple ID or tool over the current one, because iOS refuses to update it in place. To keep the game files, saves and mods, create a folder in **On My iPhone** (for example "Unleashed Data") and choose it in the launcher under **Game → Data folder**. The launcher moves your data there. After a reinstall, choose the same folder again and everything is back. iCloud Drive folders are not supported, because iOS can remove their files from the device.
+
 ## Launcher
 
-The launcher opens before the game and saves every change right away. Sections:
+The launcher opens before the game and saves every change right away. It follows the system language: English, German, Spanish, French, Italian, Japanese, Portuguese or Russian. Sections:
 
-- **Game:** which files and DLC packs are installed, the data folder in Files, and the installer for the game or DLC.
+- **Game:** which files and DLC packs are installed, the installer for the game or DLC, and the [data folder](#keep-your-data-when-reinstalling).
 - **Graphics:** the settings below plus quality options; Metal HUD applies without a restart here.
 - **Controls:** when touch controls are shown (automatic, always, off), camera by swipe or a right stick, analog or D-pad stick, camera sensitivity, and **Arrange controls**, which starts the game in the layout editor.
 - **Mods:** HMM/UMM mods from the `mods` folder, with on/off switches, load order, settings for mods that ship a configuration schema, and installing a mod from a folder or ZIP. **Codes** are the built-in game patches.
 - **Updates:** compares the app with the latest [release](https://github.com/ITSeniy/unleashed-recompiled-ios/releases) of this fork.
-- **Advanced:** skip intro logos, force ETC2 textures for testing, diagnostic logs, and sharing the log.
+- **Advanced:** skip intro logos, diagnostic logs, and sharing the log.
 
-Mods use the same `cpkredir.ini` format as desktop mod managers, with paths relative to the app folder.
+Mods use the same `cpkredir.ini` format as desktop mod managers, with paths relative to the data folder.
 
 ## Settings
 
@@ -104,16 +108,17 @@ The iOS-specific options are in the launcher's **Graphics** section and in-game 
 
 | Setting | Default | What it does |
 | --- | --- | --- |
-| Resolution Scale | 66% | Internal rendering resolution. The biggest performance lever. |
-| MetalFX Upscaling | On | Upscales the internal resolution to the screen with Apple MetalFX Spatial. Only active below 100%. |
+| MetalFX Upscaling | Quality | Presets like DLSS in PC games: Quality renders at 67% of the screen's resolution, Balanced at 58%, Performance at 50%, Ultra Performance at 33%, and MetalFX upscales the result. Off renders at Resolution Scale without MetalFX. |
+| Resolution Scale | 67% | Internal rendering resolution, set by the preset. Moving it switches the preset to Custom. |
 | Skip Unused Copies | On | Skips end-of-frame copies of render targets the game never reads. Turn it off if you see flickering or image areas that do not update. |
 | Reuse Render Targets | On | Swaps render-target memory instead of copying it before full-screen effects. Turn it off if post-processing (bloom, depth of field, motion blur) looks corrupted. |
 | FPS | 30 | 60 FPS needs a fast device; 30 FPS saves battery and heat. |
+| Show FPS, Show Profiler | Off | Frame-rate counter and the performance profiler overlay. |
 | Metal HUD | Off | Apple's frame-time overlay. Takes effect after a restart. |
 
-In-game, these apply immediately except Metal HUD, which needs a restart. Guidance for iPhone 15–class devices:
+In-game, these apply immediately except Metal HUD, which needs a restart. VSync is always on: iOS cannot tear. Guidance for iPhone 15–class devices:
 
-- **60 FPS:** 66% with MetalFX (default).
+- **60 FPS:** Quality (default).
 - **Sharper at 60 FPS:** up to 75%, but it sits at the edge of the GPU budget once the phone warms up.
 - **Native 100%:** realistic only at 30 FPS. At 60 FPS it holds only while the phone is cool.
 
