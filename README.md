@@ -1,158 +1,146 @@
 # Unleashed Recompiled for iOS
 
-An experimental iPhone/iPad port of [Unleashed Recompiled](https://github.com/hedge-dev/UnleashedRecomp), built on top of the [Android port](https://github.com/SansNope/UnleashedRecomp-Android) and the Metal/UIKit groundwork of [Loganbogan9/UnleashedRecompiOS](https://github.com/Loganbogan9/UnleashedRecompiOS). The game runs through static recompilation, not Xbox 360 emulation, so it needs no JIT.
+Sonic Unleashed on an iPhone. Not emulated: this is [Unleashed Recompiled](https://github.com/hedge-dev/UnleashedRecomp), the PC port that turns the Xbox 360 game into native code, brought to iOS. Because nothing is emulated, there's no JIT to fight with. You sideload the app like any other and play.
+
+The port stands on the shoulders of two other projects: the [Android port](https://github.com/SansNope/UnleashedRecomp-Android), which this fork shares its code with, and [Loganbogan9's iOS fork](https://github.com/Loganbogan9/UnleashedRecompiOS), which did the Metal and UIKit groundwork.
 
 > [!IMPORTANT]
-> This project does not include the game. You must supply files from your own legally acquired copy of *Sonic Unleashed* for Xbox 360.
+> The game itself isn't included. You need the files from your own copy of *Sonic Unleashed* for Xbox 360.
 
 > [!WARNING]
-> This is a work in progress. It has been played through on one device (iPhone 15). There are no prebuilt IPAs yet: you build the app yourself on a Mac and sideload it.
+> It's still early days. I've played through it on one phone, an iPhone 15, and that's the only device I can vouch for. If you try it on something else, I'd love to hear how it went.
 
-## Status
+## What works
 
-- Boots and plays: hub worlds, day and night stages, cutscenes, saves.
-- Native Metal renderer with Xbox 360 BC textures transcoded to ETC2 on devices without BC support.
-- A native launcher before the game: install state, graphics settings, touch controls, mods and codes, update checks and diagnostics (see [Launcher](#launcher)).
-- The same touch controls as the Android port, with a layout editor; host menus and controls stay at native resolution.
-- **MetalFX Spatial** upscaling with DLSS-style presets: the game renders at a lower internal resolution and Apple's upscaler brings it to the screen's native resolution.
-- Frame-pacing fixes for 30 and 60 FPS caps, including the iPhone panel's real 60.09 Hz refresh.
-- Two render-target optimizations that cut GPU work by about 17% (see [Settings](#settings)).
+Pretty much the whole game: the hub worlds, day and night stages, cutscenes and saves. A few things I'm especially happy with:
 
-Measured on iPhone 15 (A16), default settings, hub area: a sustained 60 FPS over seven minutes, with a clip-on cooler. Full measurements and the reasoning behind every default are in [docs/IOS_PORTING.md](docs/IOS_PORTING.md).
+- **A proper launcher.** Before the game starts, you can see whether your files are in place, tweak graphics, set up touch controls, manage mods and check for updates. It speaks your phone's language, from English to Japanese to Russian.
+- **MetalFX upscaling** with presets that work like DLSS on PC. The game renders at a lower resolution and Apple's upscaler sharpens it back up to the screen.
+- **Touch controls** shared with the Android port, including a layout editor, so you can put the buttons where your thumbs want them.
+- **Smooth frame pacing** at 30 and 60 FPS. It even accounts for the iPhone screen actually refreshing at 60.09 Hz, not 60.
 
-## System requirements
+On my iPhone 15 with default settings, it holds a steady 60 FPS in the hub for minutes on end (with a clip-on cooler, to be fair). If you're curious how the defaults were picked, every measurement is written down in [docs/IOS_PORTING.md](docs/IOS_PORTING.md).
 
-| | Requirement |
-| --- | --- |
-| OS | iOS / iPadOS **16.4** or newer (developed on iOS 27) |
-| Chip | **A13 Bionic or newer** (Apple GPU family 6, Tier 2 argument buffers). Older chips cannot create the renderer. |
-| Tested | iPhone 15 (A16) only. iPhone SE 3 (A15) has a test build but no result yet. Other devices are untested. |
-| Recommended for 60 FPS | A16-class or newer. A13–A15 are untested; expect to use 30 FPS or a lower resolution scale. |
-| Memory | The game uses about 0.9–1 GB at default settings. Devices with 4 GB of RAM or more are recommended; 3 GB devices (e.g. iPhone 11, SE 2) are untested. No increased-memory-limit entitlement is required on the tested device. |
-| Storage | Room for your game files (several GB) plus about 100 MB for the app. |
-| To build | A Mac with Xcode (iPhoneOS SDK and Metal Toolchain), Python 3.12+, CMake 3.20+, Ninja, and an Apple ID (free or paid). |
+## What you need
 
-iPad layouts were checked in the Simulator only. Bluetooth game controllers have not been tested yet.
+- **iOS or iPadOS 16.4** or newer.
+- **An A13 chip or newer** (iPhone 11 and later). Older chips can't run the renderer at all.
+- **For 60 FPS**, something like the A16 in the iPhone 15. A13–A15 should run, but I haven't been able to test them yet; plan on 30 FPS or a lower preset there.
+- **About 1 GB of free memory** while playing. Phones with 4 GB of RAM or more should be comfortable; 3 GB ones like the iPhone SE 2 are untested.
+- **A few gigabytes of storage** for the game files, plus around 100 MB for the app.
 
-## Build the app
+iPad layouts have only been checked in the Simulator, and I haven't tried Bluetooth controllers yet.
 
-iOS builds from the same game sources as the Android port; only the renderer library, SDL and the shader translator use iOS-specific versions, downloaded by `ios/prepare.py`. The full procedure is in [ios/README.md](ios/README.md). In short, from the repository root:
+## Getting it on your phone
 
-1. Put your own `default.xex`, `default.xexp` and `shader.ar` in `UnleashedRecompLib/private/`.
-2. Run `python3 ios/prepare.py` (downloads the iOS dependencies), build the host tools, then `python3 ios/generate.py`.
-3. Configure the Xcode project with your Team ID and a unique bundle ID, and build the `UnleashedRecomp` target in Release.
-4. Either install straight from Xcode to a connected device, or package an IPA for sideloading:
+Check the [Releases](https://github.com/ITSeniy/unleashed-recompiled-ios/releases) page for a ready-made IPA. It's unsigned on purpose: your sideloading tool signs it with your own Apple ID. If there's no release yet, or you'd rather build it yourself, see [Building it yourself](#building-it-yourself).
+
+Any Apple ID sideloader will do. These are the ones the [MeloNX](https://starforgejo.dev/projects/MeloNX) guide recommends, and they work here too (minus the JIT step, which this port doesn't need):
+
+- **[PlumeImpactor](https://github.com/claration/Impactor/releases)**, on your computer. Sign in with your Apple ID, drop in the IPA, pick your device and hit **Install**. This is the easiest route.
+- **[SideStore](https://sidestore.io/)** or **AltStore Classic**, on the phone. Handy because they can refresh the app without a computer. If you also use PlumeImpactor, sign in with the same Apple ID.
+- **[TrollStore](https://github.com/opa334/TrollStore)**, if your iOS version supports it. It installs the app permanently, no re-signing needed.
+
+Two things to know after the first install:
+
+1. iOS won't open sideloaded apps until you turn on **Settings → Privacy & Security → Developer Mode** and restart.
+2. With a free Apple ID, the app stops opening after 7 days and you can only have 3 sideloaded apps at once. Refresh it through SideStore or AltStore, or just reinstall. A paid developer account stretches that to a year.
+
+## Adding your game files
+
+The easiest way is to copy an existing install over:
+
+1. Install the game on a PC with the official Unleashed Recompiled installer (or use the files from the Android port). You'll end up with `game`, `update` and `patched` folders, plus DLC folders if you have them.
+2. Open the iOS app once so it creates its folder.
+3. Copy the folders into **On My iPhone → Unleashed Recompiled → UnleashedRecomp** with the Files app, or with Finder on a Mac (select your phone, then **Files**). The launcher's **Files** button takes you straight there.
+4. Switch back to the app. It notices the files on its own; tap **Play**.
+
+If you only have the original disc image, tap **Install game** in the launcher instead. It walks you through installing from your disc image, title update and DLC packages.
+
+Your saves, settings and the log (`unleashedrecomp.log`) end up in the same folder, so backing up or moving to a new phone is just a matter of copying it.
+
+### Don't lose everything on a reinstall
+
+Here's an annoying iOS detail: when an app is deleted, its folder goes with it. And sometimes iOS forces you to delete the app first, for example when you install a build signed with a different Apple ID or a different tool over the old one. That would mean copying gigabytes of game files again.
+
+To avoid that, keep your data outside the app. Create a folder in **On My iPhone** (say, "Unleashed Data"), then in the launcher go to **Game → Data folder** and choose it. The launcher moves everything over. If you ever reinstall, choose the same folder again and you're right back where you left off. Just don't pick a folder in iCloud Drive: iOS can quietly offload those files, and the game can't read them then.
+
+## The launcher
+
+The launcher opens every time before the game, and every change you make there is saved right away.
+
+- **Game** shows whether the game, the update and each DLC pack are installed. It's also where you start the installer and choose the [data folder](#dont-lose-everything-on-a-reinstall).
+- **Graphics** has the MetalFX presets, frame rate, quality options and a few overlays. Metal HUD applies right away here, while from the in-game menu it needs a restart.
+- **Controls** decides when touch controls show up (automatically, always, or never), whether you steer the camera by swiping or with a right stick, and how fast it turns. **Arrange controls** starts the game straight in the layout editor.
+- **Mods** lists the HMM/UMM mods in your `mods` folder. Turn them on and off, drag them into the order you want, open their settings if they have any, or install a new one from a ZIP or folder. **Codes** are the small built-in game tweaks you might know from desktop mod managers.
+- **Updates** checks this fork's releases for a newer version.
+- **Advanced** lets you skip the intro logos, turn on diagnostic logs, and share the log when something goes wrong.
+
+Mods use the same `cpkredir.ini` format as the desktop mod managers, so existing setups carry over.
+
+## Getting the most out of it
+
+Most of the graphics options are the game's own. The iOS-specific ones are in the launcher's **Graphics** section and in-game under **Options → Video**:
+
+- **MetalFX Upscaling** works like DLSS. **Quality** renders at 67% of the screen resolution and is the default. **Balanced** (58%), **Performance** (50%) and **Ultra Performance** (33%) trade sharpness for speed. **Off** skips MetalFX entirely.
+- **Resolution Scale** follows the preset. Drag it yourself and the preset switches to **Custom**.
+- **FPS** defaults to 30, which is kind to your battery. 60 needs a fast phone.
+- **Skip Unused Copies** and **Reuse Render Targets** are two tricks that cut the GPU's work by about 17%. They're on by default. If you ever see flickering, frozen patches of the image or broken bloom, turn them off and let me know.
+- **Show FPS**, **Show Profiler** and **Metal HUD** are there if you like numbers on screen.
+
+There's no VSync option, because iOS never tears anyway.
+
+On an iPhone 15, my advice: keep **Quality** at 60 FPS. You can push the resolution to around 75%, but once the phone warms up it'll start to struggle. Native 100% is really only realistic at 30 FPS.
+
+## Known issues
+
+- **Brief hitches** (roughly 70–300 ms) during autosaves and when entering a new area. That's the game's own CPU work, not the graphics.
+- **Heat.** Long sessions at high resolutions slow down as the phone warms up. iOS quietly lowers the GPU clock well before it admits to being "Fair" or "Serious" on temperature.
+- **Temporal MetalFX** is still experimental and hidden behind a launch flag.
+
+Found something else? Open an issue and attach `unleashedrecomp.log`: in the launcher, **Advanced → Share log** does it in two taps. Mention your device, iOS version and settings, and I'll take a look.
+
+## Building it yourself
+
+You'll need a Mac with Xcode (including the iOS SDK and the Metal toolchain), Python 3.12+, CMake 3.20+, Ninja, and an Apple ID; a free one is fine.
+
+iOS builds from the same game code as the Android port. Only three pieces differ: the renderer library, SDL and the shader translator, which `ios/prepare.py` downloads for you. Roughly, from the repository root:
+
+1. Put your own `default.xex`, `default.xexp` and `shader.ar` into `UnleashedRecompLib/private/`.
+2. Run `python3 ios/prepare.py`, build the host tools, then run `python3 ios/generate.py`.
+3. Configure the Xcode project with your Team ID and a bundle ID of your own, and build the `UnleashedRecomp` target in Release.
+4. Install it from Xcode, or package an unsigned IPA for a sideloading tool:
 
    ```sh
    python3 ios/package_ipa.py
    ```
 
-   This writes an **unsigned** IPA to `out/ios/dist/`. The sideloading tool signs it with your Apple ID.
+   The IPA lands in `out/ios/dist/`.
 
-Never commit or share `UnleashedRecompLib/private/`, `UnleashedRecompLib/ppc/` or anything under `out/`: they contain or are derived from the game.
-
-## Install on your device
-
-### Option 1: install from Xcode
-
-If you built the app yourself, the Xcode build is already signed with your team. Install it with Xcode's *Devices and Simulators* window, or:
-
-```sh
-xcrun devicectl device install app --device <device> "out/ios/build/UnleashedRecomp/Release-iphoneos/Unleashed Recompiled.app"
-```
-
-### Option 2: sideload the IPA
-
-Any Apple ID sideloader works. The tools below are the same ones the [MeloNX](https://starforgejo.dev/projects/MeloNX) guide uses; unlike MeloNX, this port needs **no JIT** (no StikDebug) and no extra entitlements.
-
-- **[PlumeImpactor](https://github.com/claration/Impactor/releases)** (recommended, from a computer): sign in with your Apple ID, import the IPA, select your device and click **Install**.
-- **[SideStore](https://sidestore.io/)** or **AltStore Classic** (on the device): install the IPA through them so you can refresh the signature without a computer. If you use PlumeImpactor, sign in with the same Apple ID.
-- **[TrollStore](https://github.com/opa334/TrollStore)** (only on iOS versions it supports): installs permanently without re-signing. Not required.
-
-After the first install:
-
-1. Turn on **Settings → Privacy & Security → Developer Mode** and restart when iOS asks. Development-signed apps will not open without it on iOS 16 and later.
-2. With a **free** Apple ID the signature expires after 7 days and you can have at most 3 sideloaded apps. Refresh through SideStore/AltStore, or reinstall. A paid developer account signs for a year.
-
-## Add your game files
-
-1. Install the game with the official Unleashed Recompiled installer on PC (or with the Android port). This produces the `game`, `update` and `patched` folders, plus optional DLC folders.
-2. Launch the iOS app once so it creates its data folder.
-3. Copy those folders into **On My iPhone → Unleashed Recompiled → UnleashedRecomp**, using the Files app or Finder (select the device, then **Files**). The launcher's **Files** button opens that folder.
-4. Return to the app, which rechecks the files, and tap **Play**.
-
-Alternatively, tap **Install game** in the launcher to install from your own disc image, title update and DLC packages.
-
-Saves, settings and the log (`unleashedrecomp.log`) live in the same folder. You can back them up or move them between devices.
-
-### Keep your data when reinstalling
-
-iOS deletes an app's folder when the app is removed. That happens when you install a build signed with a different Apple ID or tool over the current one, because iOS refuses to update it in place. To keep the game files, saves and mods, create a folder in **On My iPhone** (for example "Unleashed Data") and choose it in the launcher under **Game → Data folder**. The launcher moves your data there. After a reinstall, choose the same folder again and everything is back. iCloud Drive folders are not supported, because iOS can remove their files from the device.
-
-## Launcher
-
-The launcher opens before the game and saves every change right away. It follows the system language: English, German, Spanish, French, Italian, Japanese, Portuguese or Russian. Sections:
-
-- **Game:** which files and DLC packs are installed, the installer for the game or DLC, and the [data folder](#keep-your-data-when-reinstalling).
-- **Graphics:** the settings below plus quality options; Metal HUD applies without a restart here.
-- **Controls:** when touch controls are shown (automatic, always, off), camera by swipe or a right stick, analog or D-pad stick, camera sensitivity, and **Arrange controls**, which starts the game in the layout editor.
-- **Mods:** HMM/UMM mods from the `mods` folder, with on/off switches, load order, settings for mods that ship a configuration schema, and installing a mod from a folder or ZIP. **Codes** are the built-in game patches.
-- **Updates:** compares the app with the latest [release](https://github.com/ITSeniy/unleashed-recompiled-ios/releases) of this fork.
-- **Advanced:** skip intro logos, diagnostic logs, and sharing the log.
-
-Mods use the same `cpkredir.ini` format as desktop mod managers, with paths relative to the data folder.
-
-## Settings
-
-The iOS-specific options are in the launcher's **Graphics** section and in-game under **Options → Video**:
-
-| Setting | Default | What it does |
-| --- | --- | --- |
-| MetalFX Upscaling | Quality | Presets like DLSS in PC games: Quality renders at 67% of the screen's resolution, Balanced at 58%, Performance at 50%, Ultra Performance at 33%, and MetalFX upscales the result. Off renders at Resolution Scale without MetalFX. |
-| Resolution Scale | 67% | Internal rendering resolution, set by the preset. Moving it switches the preset to Custom. |
-| Skip Unused Copies | On | Skips end-of-frame copies of render targets the game never reads. Turn it off if you see flickering or image areas that do not update. |
-| Reuse Render Targets | On | Swaps render-target memory instead of copying it before full-screen effects. Turn it off if post-processing (bloom, depth of field, motion blur) looks corrupted. |
-| FPS | 30 | 60 FPS needs a fast device; 30 FPS saves battery and heat. |
-| Show FPS, Show Profiler | Off | Frame-rate counter and the performance profiler overlay. |
-| Metal HUD | Off | Apple's frame-time overlay. Takes effect after a restart. |
-
-In-game, these apply immediately except Metal HUD, which needs a restart. VSync is always on: iOS cannot tear. Guidance for iPhone 15–class devices:
-
-- **60 FPS:** Quality (default).
-- **Sharper at 60 FPS:** up to 75%, but it sits at the edge of the GPU budget once the phone warms up.
-- **Native 100%:** realistic only at 30 FPS. At 60 FPS it holds only while the phone is cool.
-
-## Known issues
-
-- Autosaves and loading new areas can cause short hitches (roughly 70–300 ms). They come from the game's own CPU work, not from the GPU.
-- Long sessions at high resolution scales slow down as the phone heats up. iOS lowers the GPU clock well before it reports a "Fair" or "Serious" thermal state.
-- Temporal MetalFX is experimental and only available through a launch flag.
-
-For bug reports, attach `unleashedrecomp.log` from the app folder and describe the device, iOS version and settings.
+The full walkthrough is in [ios/README.md](ios/README.md). One rule: never commit or share `UnleashedRecompLib/private/`, `UnleashedRecompLib/ppc/` or anything in `out/`, because they contain or are derived from the game.
 
 ## For developers
 
-- [ios/README.md](ios/README.md): build pipeline, patches and diagnostic launch flags (`UNLEASHED_IOS_FRAME_DIAGNOSTICS`, pass and resolve profiling, MetalFX overrides).
-- [docs/IOS_PORTING.md](docs/IOS_PORTING.md): the full engineering log, covering DVFS-aware measurement at a fixed GPU clock, per-pass costs, frame-pacing fixes and the resolve-copy work.
-- [tools/ios_probe](tools/ios_probe): a standalone Metal capability probe for new devices.
-- Android and iOS share one codebase, so features land on both. The Android build works as in the [Android port](https://github.com/SansNope/UnleashedRecomp-Android); see its documentation. Platform-specific code is behind `__ANDROID__` and `UNLEASHED_RECOMP_IOS`.
+- [ios/README.md](ios/README.md) covers the build pipeline, the dependency patches and the diagnostic launch flags.
+- [docs/IOS_PORTING.md](docs/IOS_PORTING.md) is the engineering log: how performance was measured at a locked GPU clock, what each render pass costs, the frame-pacing fixes and the render-target work.
+- [tools/ios_probe](tools/ios_probe) is a small app that reports what a device's GPU supports.
+- Android and iOS share one codebase, so improvements land on both. Platform-specific code sits behind `__ANDROID__` and `UNLEASHED_RECOMP_IOS`. For the Android side, see the [Android port's](https://github.com/SansNope/UnleashedRecomp-Android) documentation.
 
-## AI-assisted development
+## A note on AI
 
-Like the Android port, most of the iOS work was written with AI tools: OpenAI Codex for the initial bring-up, and Anthropic's Claude (Opus 5.5) for the performance investigation and optimizations. The human maintainer set the direction, tested every build on a real iPhone, and decided what ships. Detailed reports with the log attached are the most useful contribution.
+Like the Android port, most of this was written with AI tools: OpenAI Codex for the first bring-up, and Anthropic's Claude (Opus 5.5) for the performance work, the launcher and the merge with Android. I ([ITSeniy](https://github.com/ITSeniy)) set the direction, tested every build on a real iPhone and decided what shipped. If you want to help, the most useful thing is a detailed bug report with the log attached.
 
 ## Legal
 
-This repository contains no *Sonic Unleashed* game assets. It is not affiliated with or endorsed by SEGA, Microsoft, Apple, or the upstream Unleashed Recompiled team.
+This repository contains no *Sonic Unleashed* game assets. The project isn't affiliated with or endorsed by SEGA, Microsoft, Apple or the Unleashed Recompiled team.
 
-The project is distributed under GPL-3.0, following the upstream project. Third-party components retain their own licenses.
+It's distributed under GPL-3.0, like the upstream project. Third-party components keep their own licenses.
 
-## Credits
+## Thanks
 
-- [hedge-dev and the Unleashed Recompiled contributors](https://github.com/hedge-dev/UnleashedRecomp): the original static recompilation project
-- [SansNope](https://github.com/SansNope) and the [Android port](https://github.com/SansNope/UnleashedRecomp-Android) contributors: the base of this fork
-- [Loganbogan9/UnleashedRecompiOS](https://github.com/Loganbogan9/UnleashedRecompiOS): the Metal and UIKit iOS groundwork this port builds on
-- [ITSeniy](https://github.com/ITSeniy): iOS port, device testing and maintenance
-- [renderbag/plume](https://github.com/renderbag/plume): the renderer abstraction, with its Metal backend
-- [MeloNX](https://starforgejo.dev/projects/MeloNX): the sideloading guide this README follows
+- [hedge-dev and everyone behind Unleashed Recompiled](https://github.com/hedge-dev/UnleashedRecomp), for making any of this possible
+- [SansNope](https://github.com/SansNope) and the [Android port](https://github.com/SansNope/UnleashedRecomp-Android) contributors, whose work this fork is built on
+- [Loganbogan9](https://github.com/Loganbogan9/UnleashedRecompiOS), for the Metal and UIKit groundwork
+- [renderbag/plume](https://github.com/renderbag/plume), the renderer and its Metal backend
+- [MeloNX](https://starforgejo.dev/projects/MeloNX), whose sideloading guide inspired the one here
 - Everyone who tests builds and sends logs
