@@ -1,5 +1,6 @@
 #include <stdafx.h>
 #include "ios_mod_settings.h"
+#include "ios_launcher_strings.h"
 #include "ios_mod_manager.h"
 #include <locale/locale.h>
 #include <mod/ini_file.h>
@@ -16,7 +17,7 @@ static constexpr NSUInteger MaxFields = 256;
 
 static NSString* L(const char* key)
 {
-    return [NSString stringWithUTF8String:Localise(key).c_str()] ?: @"";
+    return [NSString stringWithUTF8String:launcher_strings::Get(key)] ?: @"";
 }
 
 static std::string Utf8(NSString* value)

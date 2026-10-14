@@ -1,5 +1,6 @@
 #include <stdafx.h>
 #include "ios_launcher.h"
+#include "ios_launcher_strings.h"
 #include "ios_data_folder.h"
 #include "ios_mod_manager.h"
 #include "ios_mod_settings.h"
@@ -59,12 +60,70 @@ static NSString* NS(const std::string& value)
 
 static NSString* L(const char* key)
 {
-    return NS(Localise(key));
+    return NS(launcher_strings::Get(key));
+}
+
+// Game text marks Japanese readings as [漢字:かな] for the in-game ruby renderer.
+static std::string StripFurigana(std::string text)
+{
+    std::string result;
+    for (size_t i = 0; i < text.size(); i++)
+    {
+        if (text[i] == '[')
+        {
+            const size_t colon = text.find(':', i);
+            const size_t close = text.find(']', i);
+            if (colon != std::string::npos && close != std::string::npos && colon < close)
+            {
+                result.append(text, i + 1, colon - i - 1);
+                i = close;
+                continue;
+            }
+        }
+        result += text[i];
+    }
+    return result;
+}
+
+// Config text in the launcher language: launcher overrides first (Portuguese,
+// Russian and settings the game has only in English), then the game's own text.
+static NSString* ConfigName(const IConfigDef& def)
+{
+    if (const char* text = launcher_strings::GetConfigOverride("Name." + std::string(def.GetName())))
+        return NS(text);
+    return NS(StripFurigana(def.GetNameLocalised(launcher_strings::GetGameLanguage())));
+}
+
+static std::string ConfigDescription(const IConfigDef& def)
+{
+    if (const char* text = launcher_strings::GetConfigOverride("Desc." + std::string(def.GetName())))
+        return text;
+    return StripFurigana(def.GetDescription(launcher_strings::GetGameLanguage()));
 }
 
 static NSString* PathString(const std::filesystem::path& path)
 {
     return [NSString stringWithUTF8String:(const char*)path.u8string().c_str()] ?: @"";
+}
+
+static NSString* MenuLabel(const std::string& text);
+
+template<typename T>
+static NSString* EnumLabel(const ConfigDef<T>& def, T value)
+{
+    const auto name = def.EnumTemplateReverse.find(value);
+    if (name != def.EnumTemplateReverse.end())
+    {
+        if (const char* text = launcher_strings::GetConfigOverride("Value." + def.Name + "." + name->second))
+            return NS(text);
+    }
+    // The game only exposes the localised name of the current value.
+    auto& mutableDef = const_cast<ConfigDef<T>&>(def);
+    const T current = mutableDef.Value;
+    mutableDef.Value = value;
+    NSString* label = MenuLabel(StripFurigana(mutableDef.GetValueLocalised(launcher_strings::GetGameLanguage())));
+    mutableDef.Value = current;
+    return label;
 }
 
 // Game option values are upper case ("ULTRA PERFORMANCE"); iOS menus use sentence
@@ -181,9 +240,9 @@ static LauncherRow* ToggleRow(ConfigDef<bool, isHidden>& def, NSString* title = 
     ConfigDef<bool, isHidden>* config = &def;
     LauncherRow* row = [LauncherRow new];
     row.kind = LauncherRowToggle;
-    row.title = title ?: NS(def.GetNameLocalised(Config::Language));
+    row.title = title ?: ConfigName(def);
     if (title == nil)
-        row.detail = OneLine(def.GetDescription(Config::Language));
+        row.detail = OneLine(ConfigDescription(def));
     row.isOn = ^BOOL { return config->Value; };
     row.setOn = ^(BOOL on)
     {
@@ -203,9 +262,9 @@ static LauncherRow* EnumRow(ConfigDef<T>& def)
     ConfigDef<T>* config = &def;
     LauncherRow* row = [LauncherRow new];
     row.kind = LauncherRowMenu;
-    row.title = NS(def.GetNameLocalised(Config::Language));
-    row.detail = OneLine(def.GetDescription(Config::Language));
-    row.value = ^NSString* { return MenuLabel(config->GetValueLocalised(Config::Language)); };
+    row.title = ConfigName(def);
+    row.detail = OneLine(ConfigDescription(def));
+    row.value = ^NSString* { return EnumLabel(*config, config->Value); };
     row.menu = ^NSArray<UIMenuElement*>* (void (^changed)(void))
     {
         NSMutableArray<UIMenuElement*>* actions = [NSMutableArray array];
@@ -215,10 +274,7 @@ static LauncherRow* EnumRow(ConfigDef<T>& def)
             if (config->InaccessibleValues.contains(value))
                 continue;
 
-            // The localised name is only exposed for the current value.
-            config->Value = value;
-            NSString* label = MenuLabel(config->GetValueLocalised(Config::Language));
-            config->Value = current;
+            NSString* label = EnumLabel(*config, value);
 
             const T choice = value;
             UIAction* action = [UIAction actionWithTitle:label image:nil identifier:nil handler:^(UIAction*)
@@ -586,7 +642,7 @@ static InstallStatus InspectInstallation()
 
     NSMutableArray<NSString*>* parts = [NSMutableArray array];
     if (Config::MetalFXQuality != EMetalFXQuality::Off && Config::ResolutionScale < 1.0f)
-        [parts addObject:[@"MetalFX " stringByAppendingString:MenuLabel(Config::MetalFXQuality.GetValueLocalised(Config::Language)).lowercaseString]];
+        [parts addObject:[@"MetalFX " stringByAppendingString:EnumLabel(Config::MetalFXQuality, Config::MetalFXQuality.Value).lowercaseString]];
     [parts addObject:[NSString stringWithFormat:@"%d%%", int(std::lround(Config::ResolutionScale * 100.0f))]];
     [parts addObject:[self frameRateLabel:int32_t(Config::FPS)]];
     _summary.text = [parts componentsJoinedByString:@" · "];
@@ -882,7 +938,7 @@ static NSArray<NSString*>* FolderEntries(NSString* path)
     LauncherGroup* resolution = [LauncherGroup groupWithHeader:L("IOSLauncher_Group_Resolution") footer:L("IOSLauncher_Resolution_Footer")];
     LauncherRow* scale = [LauncherRow new];
     scale.kind = LauncherRowSlider;
-    scale.title = NS(Config::ResolutionScale.GetNameLocalised(Config::Language));
+    scale.title = ConfigName(Config::ResolutionScale);
     scale.minimum = 0.25f;
     scale.maximum = std::max(1.0f, float(Config::ResolutionScale));
     scale.floatValue = ^float { return Config::ResolutionScale; };
@@ -898,8 +954,8 @@ static NSArray<NSString*>* FolderEntries(NSString* path)
     LauncherGroup* frameRate = [LauncherGroup groupWithHeader:L("IOSLauncher_Group_FrameRate") footer:nil];
     LauncherRow* fps = [LauncherRow new];
     fps.kind = LauncherRowMenu;
-    fps.title = NS(Config::FPS.GetNameLocalised(Config::Language));
-    fps.detail = OneLine(Config::FPS.GetDescription(Config::Language));
+    fps.title = ConfigName(Config::FPS);
+    fps.detail = OneLine(ConfigDescription(Config::FPS));
     __weak LauncherViewController* weakSelf = self;
     fps.value = ^NSString* { return [weakSelf frameRateLabel:int32_t(Config::FPS)]; };
     fps.menu = ^NSArray<UIMenuElement*>* (void (^changed)(void))
@@ -957,7 +1013,7 @@ static NSArray<NSString*>* FolderEntries(NSString* path)
 
     LauncherRow* sensitivity = [LauncherRow new];
     sensitivity.kind = LauncherRowSlider;
-    sensitivity.title = NS(Config::TouchCameraSensitivity.GetNameLocalised(Config::Language));
+    sensitivity.title = ConfigName(Config::TouchCameraSensitivity);
     sensitivity.minimum = hid::TouchGamepad::MinCameraSensitivity;
     sensitivity.maximum = hid::TouchGamepad::MaxCameraSensitivity;
     sensitivity.floatValue = ^float { return Config::TouchCameraSensitivity; };
@@ -1605,6 +1661,8 @@ IOSLauncherAction RunIOSLauncher()
 {
     assert(NSThread.isMainThread);
     ApplyEnvironmentSwitches();
+    // The system language, like the Android launcher, not the game's language setting.
+    launcher_strings::SetLanguage((NSLocale.preferredLanguages.firstObject ?: @"en").UTF8String);
 
     __block bool finished = false;
     __block IOSLauncherAction result = IOSLauncherAction::Play;
