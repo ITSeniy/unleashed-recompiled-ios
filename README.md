@@ -35,7 +35,7 @@ iPad layouts have only been checked in the Simulator, and I haven't tried Blueto
 
 Check the [Releases](https://github.com/ITSeniy/unleashed-recompiled-ios/releases) page for a ready-made IPA. It's unsigned on purpose: your sideloading tool signs it with your own Apple ID. If there's no release yet, or you'd rather build it yourself, see [Building it yourself](#building-it-yourself).
 
-Any Apple ID sideloader will do. These are the ones the [MeloNX](https://starforgejo.dev/projects/MeloNX) guide recommends, and they work here too (minus the JIT step, which this port doesn't need):
+Any Apple ID sideloader will do. These are the ones I recommend:
 
 - **[PlumeImpactor](https://github.com/claration/Impactor/releases)**, on your computer. Sign in with your Apple ID, drop in the IPA, pick your device and hit **Install**. This is the easiest route.
 - **[SideStore](https://sidestore.io/)** or **AltStore Classic**, on the phone. Handy because they can refresh the app without a computer. If you also use PlumeImpactor, sign in with the same Apple ID.
